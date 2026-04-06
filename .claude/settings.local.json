@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet add:*)",
+      "Bash(dotnet build:*)",
+      "Bash(grep -n \"class.*Resumo\\\\|class.*Controlado\\\\|class.*Ignorado\" *.cs)",
+      "Bash(wc -l *.cs)"
+    ]
+  }
+}

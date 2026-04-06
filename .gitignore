@@ -1,0 +1,23 @@
+## Build output
+[Bb]in/
+[Oo]bj/
+publish/
+
+## NuGet
+packages/
+!packages.config
+
+## Visual Studio
+.vs/
+*.csproj.user
+*.suo
+*.user
+
+## Signing keys
+*.pfx
+
+## OS
+$RECYCLE.BIN/
+Thumbs.db
+Desktop.ini
+System Volume Information/
