@@ -11,6 +11,7 @@
   <img src="https://img.shields.io/badge/.NET-10-512BD4?style=flat-square&logo=dotnet" alt=".NET 10">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%2FServer-0078D6?style=flat-square&logo=windows" alt="Windows">
   <img src="https://img.shields.io/badge/database-PostgreSQL-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License">
 </p>
 
 ---
@@ -158,4 +159,4 @@ O `AppId` fixo no Inno Setup (`C7F3B8A2-4D5E-4F6A-9B1C-8E2D3F4A5B6C`) garante up
 
 ## Licença
 
-Software proprietário — todos os direitos reservados.
+Distribuído sob a **[Licença MIT](LICENSE)**. Qualquer pessoa pode baixar, usar, modificar, distribuir e sublicenciar livremente — uso pessoal ou comercial. Sem garantias.
