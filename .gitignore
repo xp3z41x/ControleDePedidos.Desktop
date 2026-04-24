@@ -14,6 +14,9 @@ packages/
 *.suo
 *.user
 
+## Publish profiles (user/machine-specific, regenerated pelo VS)
+Properties/PublishProfiles/
+
 ## Claude Code
 .claude/
 
