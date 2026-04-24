@@ -45,10 +45,15 @@ namespace CONTROLE_DE_PEDIDOS
 
         // Fonts
         public static readonly Font FontRegular = new("Segoe UI", 9.5f);
+        public static readonly Font FontRegularBold = new("Segoe UI Semibold", 9.5f);
         public static readonly Font FontSmall = new("Segoe UI", 8.5f);
         public static readonly Font FontTitle = new("Segoe UI Semibold", 12f);
         public static readonly Font FontHeader = new("Segoe UI Semibold", 9f);
         public static readonly Font FontIcon = new("Segoe UI", 13f);
+        public static readonly Font FontDetalheLabel = new("Segoe UI", 7.5f);
+        public static readonly Font FontDetalheValor = new("Segoe UI", 10f);
+        public static readonly Font FontDetalheDestaque = new("Segoe UI Semibold", 13f);
+        public static readonly Font FontSecaoTitulo = new("Segoe UI Semibold", 8f);
 
         public static void EstilizarBotao(Button btn, bool primario = false)
         {
@@ -180,6 +185,103 @@ namespace CONTROLE_DE_PEDIDOS
 
                 int minWidth = col.MinimumWidth > 0 ? col.MinimumWidth : 50;
                 col.Width = Math.Max(maxWidth, minWidth);
+            }
+        }
+    }
+
+    public class ThemeToolStripRenderer : ToolStripProfessionalRenderer
+    {
+        public ThemeToolStripRenderer() : base(new ThemeMenuColors()) { }
+
+        protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+        {
+            using var brush = new SolidBrush(Theme.BgCard);
+            e.Graphics.FillRectangle(brush, e.AffectedBounds);
+        }
+
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+        {
+            // sem borda — o painel já tem uma linha inferior separadora
+        }
+
+        protected override void OnRenderButtonBackground(ToolStripItemRenderEventArgs e)
+        {
+            PintarItemDropDown(e);
+        }
+
+        protected override void OnRenderDropDownButtonBackground(ToolStripItemRenderEventArgs e)
+        {
+            PintarItemDropDown(e);
+        }
+
+        private static void PintarItemDropDown(ToolStripItemRenderEventArgs e)
+        {
+            var rc = new Rectangle(Point.Empty, e.Item.Size);
+            Color bg;
+            if (e.Item is ToolStripDropDownItem dd && dd.Pressed)
+                bg = Theme.BgPanel;
+            else if (e.Item.Selected)
+                bg = Theme.BgInput;
+            else
+                bg = Theme.BgCard;
+            using var brush = new SolidBrush(bg);
+            e.Graphics.FillRectangle(brush, rc);
+        }
+
+        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+        {
+            var rc = new Rectangle(Point.Empty, e.Item.Size);
+            var color = e.Item.Selected ? Theme.BgInput : Theme.BgPanel;
+            using var brush = new SolidBrush(color);
+            e.Graphics.FillRectangle(brush, rc);
+        }
+
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            if (e.Item.Tag as string == "filtro-ativo")
+                e.TextColor = Theme.Accent;
+            else if (e.Item.Selected)
+                e.TextColor = Theme.TextPrimary;
+            else
+                e.TextColor = Theme.TextSecondary;
+            base.OnRenderItemText(e);
+        }
+
+        protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+        {
+            var rc = e.ImageRectangle;
+            using var pen = new Pen(Theme.Accent, 2f);
+            // Desenhar um check-mark simples
+            var pts = new[]
+            {
+                new Point(rc.Left + 3, rc.Top + rc.Height / 2),
+                new Point(rc.Left + rc.Width / 2 - 1, rc.Bottom - 4),
+                new Point(rc.Right - 3, rc.Top + 3)
+            };
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            e.Graphics.DrawLines(pen, pts);
+        }
+
+        protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+        {
+            e.ArrowColor = Theme.TextSecondary;
+            base.OnRenderArrow(e);
+        }
+
+        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+        {
+            var rc = new Rectangle(Point.Empty, e.Item.Size);
+            if (e.Vertical)
+            {
+                int x = rc.Width / 2;
+                using var pen = new Pen(Theme.Border);
+                e.Graphics.DrawLine(pen, x, 6, x, rc.Height - 6);
+            }
+            else
+            {
+                int y = rc.Height / 2;
+                using var pen = new Pen(Theme.Border);
+                e.Graphics.DrawLine(pen, 6, y, rc.Width - 6, y);
             }
         }
     }

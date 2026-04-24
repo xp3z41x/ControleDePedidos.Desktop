@@ -152,7 +152,7 @@ namespace CONTROLE_DE_PEDIDOS
             var lbl = new Label
             {
                 Text = titulo,
-                Font = new Font("Segoe UI Semibold", 8f),
+                Font = Theme.FontSecaoTitulo,
                 ForeColor = Theme.Accent,
                 AutoSize = true,
                 Location = new Point(MargemX, y)
@@ -211,8 +211,46 @@ namespace CONTROLE_DE_PEDIDOS
 
         private void BtnSalvar_Click(object? sender, EventArgs e)
         {
+            if (!int.TryParse(txtPorta.Text.Trim(), out var porta) || porta < 1 || porta > 65535)
+            {
+                MessageBox.Show(this, "Porta inválida (deve estar entre 1 e 65535).", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtPorta.Focus();
+                return;
+            }
+            if (!int.TryParse(txtFilial.Text.Trim(), out var filial) || filial <= 0)
+            {
+                MessageBox.Show(this, "Filial deve ser um número maior que zero.", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtFilial.Focus();
+                return;
+            }
+            if (!int.TryParse(txtOrcamentoMinimo.Text.Trim(), out var orcMin) || orcMin < 0)
+            {
+                MessageBox.Show(this, "Orçamento Mínimo deve ser zero ou maior.", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtOrcamentoMinimo.Focus();
+                return;
+            }
+            if (!int.TryParse(txtFilialFiscal.Text.Trim(), out var filialFiscal) || filialFiscal < 0)
+            {
+                MessageBox.Show(this, "Filial Fiscal deve ser zero ou maior (0 = não configurada).", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtFilialFiscal.Focus();
+                return;
+            }
+
             AplicarConfig();
-            Config.Salvar();
+            try
+            {
+                Config.Salvar();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Erro ao salvar configurações:\n{ex.Message}", "Erro",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
             DialogResult = DialogResult.OK;
             Close();
         }

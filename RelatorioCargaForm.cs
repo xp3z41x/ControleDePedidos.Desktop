@@ -319,7 +319,7 @@ namespace CONTROLE_DE_PEDIDOS
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Erro ao buscar dados do integra: {ex}");
+                        Logger.Warn("Erro ao buscar dados do integra", ex);
                     }
                 }
 
@@ -518,7 +518,7 @@ namespace CONTROLE_DE_PEDIDOS
             });
 
             var doc = new RelatorioCargaPrintDoc(selecionados);
-            var preview = new PrintPreviewDialog
+            using var preview = new PrintPreviewDialog
             {
                 Document = doc,
                 WindowState = FormWindowState.Maximized

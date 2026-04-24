@@ -275,7 +275,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Erro ao carregar ignorados: {ex.Message}");
+                Logger.Error("Erro ao carregar ignorados", ex);
             }
         }
 

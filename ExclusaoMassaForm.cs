@@ -9,6 +9,7 @@ namespace CONTROLE_DE_PEDIDOS
         private Button btnMarcarTodos = null!;
         private Button btnDesmarcarTodos = null!;
         private Button btnMarcarFaturados = null!;
+        private Button btnMarcarRotas = null!;
         private Button btnExcluir = null!;
         private Label lblContagem = null!;
         private Label lblSelecionados = null!;
@@ -138,6 +139,15 @@ namespace CONTROLE_DE_PEDIDOS
             btnMarcarFaturados.ForeColor = Theme.Accent;
             btnMarcarFaturados.Click += (_, _) => MarcarFaturados();
 
+            btnMarcarRotas = new Button
+            {
+                Text = "Marcar Rotas",
+                Size = new Size(120, 32)
+            };
+            Theme.EstilizarBotao(btnMarcarRotas);
+            btnMarcarRotas.ForeColor = Theme.Accent;
+            btnMarcarRotas.Click += BtnMarcarRotas_Click;
+
             lblSelecionados = new Label
             {
                 Text = "0 selecionados",
@@ -160,6 +170,7 @@ namespace CONTROLE_DE_PEDIDOS
             panelAcoes.Controls.Add(btnMarcarTodos);
             panelAcoes.Controls.Add(btnDesmarcarTodos);
             panelAcoes.Controls.Add(btnMarcarFaturados);
+            panelAcoes.Controls.Add(btnMarcarRotas);
             panelAcoes.Controls.Add(lblSelecionados);
             panelAcoes.Controls.Add(btnExcluir);
 
@@ -169,9 +180,10 @@ namespace CONTROLE_DE_PEDIDOS
                 btnMarcarTodos.Location = new Point(16, cy);
                 btnDesmarcarTodos.Location = new Point(btnMarcarTodos.Right + 8, cy);
                 btnMarcarFaturados.Location = new Point(btnDesmarcarTodos.Right + 8, cy);
+                btnMarcarRotas.Location = new Point(btnMarcarFaturados.Right + 8, cy);
 
                 lblSelecionados.Location = new Point(
-                    btnMarcarFaturados.Right + 16,
+                    btnMarcarRotas.Right + 16,
                     (panelAcoes.Height - lblSelecionados.Height) / 2);
 
                 btnExcluir.Location = new Point(panelAcoes.Width - btnExcluir.Width - 16, cy);
@@ -366,7 +378,7 @@ namespace CONTROLE_DE_PEDIDOS
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Erro ao buscar pedido_venda: {ex}");
+                        Logger.Warn("Erro ao buscar pedido_venda", ex);
                     }
                 }
 
@@ -415,6 +427,54 @@ namespace CONTROLE_DE_PEDIDOS
             AtualizarContagemSelecionados();
         }
 
+        private const string SemRotaLabel = "(Sem rota)";
+
+        private void BtnMarcarRotas_Click(object? sender, EventArgs e)
+        {
+            var rotas = new SortedSet<string>(StringComparer.CurrentCultureIgnoreCase);
+            foreach (DataGridViewRow row in dgvPedidos.Rows)
+            {
+                if (row.DataBoundItem is PedidoExclusao p)
+                    rotas.Add(string.IsNullOrWhiteSpace(p.Rota) ? SemRotaLabel : p.Rota.Trim());
+            }
+
+            if (rotas.Count == 0)
+            {
+                MessageBox.Show(this, "Nenhuma rota disponível.", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var menu = new ContextMenuStrip { Renderer = new ThemeToolStripRenderer() };
+            menu.BackColor = Theme.BgCard;
+            menu.ForeColor = Theme.TextPrimary;
+            menu.Closed += (_, _) => menu.Dispose();
+            foreach (var rota in rotas)
+            {
+                var item = new ToolStripMenuItem(rota) { ForeColor = Theme.TextPrimary };
+                item.Click += (_, _) => MarcarPorRota(rota);
+                menu.Items.Add(item);
+            }
+            menu.Show(btnMarcarRotas, new Point(0, btnMarcarRotas.Height));
+        }
+
+        private void MarcarPorRota(string rota)
+        {
+            bool semRota = rota == SemRotaLabel;
+            foreach (DataGridViewRow row in dgvPedidos.Rows)
+            {
+                if (row.DataBoundItem is not PedidoExclusao p) continue;
+                bool match = semRota
+                    ? string.IsNullOrWhiteSpace(p.Rota)
+                    : string.Equals(p.Rota?.Trim(), rota, StringComparison.CurrentCultureIgnoreCase);
+                if (match)
+                    row.Cells["colSelecionar"].Value = true;
+            }
+            dgvPedidos.EndEdit();
+            dgvPedidos.RefreshEdit();
+            AtualizarContagemSelecionados();
+        }
+
         private List<PedidoExclusao> ObterSelecionados()
         {
             var selecionados = new List<PedidoExclusao>();
@@ -442,21 +502,8 @@ namespace CONTROLE_DE_PEDIDOS
                 return;
             }
 
-            // Verificar se há pedidos em faturamento entre os selecionados
-            var emFaturamento = selecionados.Where(p => p.EmFaturamento).ToList();
-            if (emFaturamento.Count > 0)
-            {
-                var orcs = string.Join(", ", emFaturamento.Select(p => p.Orcamento));
-                MessageBox.Show(this,
-                    $"Os seguintes pedidos estão em faturamento e não podem ser excluídos:\n{orcs}\n\nO operador responsável deve largá-los primeiro.\nEsses pedidos serão ignorados na exclusão.",
-                    "Pedidos em Faturamento", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-
-                selecionados = selecionados.Where(p => !p.EmFaturamento).ToList();
-                if (selecionados.Count == 0) return;
-            }
-
             var confirm = MessageBox.Show(this,
-                $"ATENÇÃO: Esta ação é irreversível!\n\nExcluir {selecionados.Count} pedido{(selecionados.Count != 1 ? "s" : "")} do controle?\n\nOs orçamentos voltarão para a lista de pendentes.",
+                $"ATENÇÃO: Esta ação é irreversível!\n\nExcluir {selecionados.Count} pedido{(selecionados.Count != 1 ? "s" : "")} do controle?\n\nOs orçamentos voltarão para a lista de pendentes caso não estejam faturados!",
                 "Confirmar Exclusão em Massa",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
 
@@ -466,33 +513,56 @@ namespace CONTROLE_DE_PEDIDOS
             btnMarcarTodos.Enabled = false;
             btnDesmarcarTodos.Enabled = false;
             btnMarcarFaturados.Enabled = false;
+            btnMarcarRotas.Enabled = false;
 
             try
             {
                 int excluidos = 0;
                 int conflitos = 0;
+                int erros = 0;
+                string? primeiroErro = null;
 
-                // Excluir um a um com verificação de concorrência
+                // Lookup batch das NFes antes do loop (1 query com IN, zero N+1)
+                var nfes = await _db.BuscarNotasFiscaisAsync(selecionados.Select(p => p.Orcamento));
+
+                // Excluir um a um com verificação de concorrência + historico
                 foreach (var pedido in selecionados)
                 {
                     try
                     {
-                        var linhas = await _db.ExecutarControleComLinhasAsync(async conn =>
-                        {
-                            using var cmd = conn.CreateCommand();
-                            cmd.CommandText = "DELETE FROM pedidos_controlados WHERE orcamento = @orc";
-                            cmd.Parameters.AddWithValue("orc", pedido.Orcamento);
-                            return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                        });
+                        nfes.TryGetValue(pedido.Orcamento, out var nfe);
+                        var reg = new ExclusaoRegistro(
+                            Orcamento: pedido.Orcamento,
+                            Cliente: pedido.Cliente,
+                            NomeFantasia: pedido.NomeFantasia,
+                            Rota: pedido.Rota,
+                            Vendedor: "", // PedidoExclusao nao carrega vendedor
+                            PedidoVenda: pedido.PedidoVenda,
+                            NotaFiscal: nfe ?? "",
+                            Status: ExclusaoRegistro.CalcularStatus(
+                                pedido.Aprovado, pedido.EmSeparacao, pedido.Conferido,
+                                pedido.Liberado, pedido.Travado, pedido.EmFaturamento,
+                                pedido.PedidoVenda),
+                            Aprovado: pedido.Aprovado,
+                            EmSeparacao: pedido.EmSeparacao,
+                            Conferido: pedido.Conferido,
+                            Liberado: pedido.Liberado,
+                            Travado: pedido.Travado,
+                            EmFaturamento: pedido.EmFaturamento,
+                            TipoExclusao: ExclusaoRegistro.TipoMassa);
+
+                        var linhas = await _db.ExcluirPedidoComHistoricoAsync(reg);
 
                         if (linhas > 0)
                             excluidos++;
                         else
                             conflitos++;
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        conflitos++;
+                        erros++;
+                        primeiroErro ??= ex.Message;
+                        Logger.Error($"Erro ao excluir pedido {pedido.Orcamento}", ex);
                     }
                 }
 
@@ -500,10 +570,14 @@ namespace CONTROLE_DE_PEDIDOS
 
                 var mensagem = $"Exclusão concluída:\n\n• {excluidos} pedido{(excluidos != 1 ? "s" : "")} excluído{(excluidos != 1 ? "s" : "")} com sucesso.";
                 if (conflitos > 0)
-                    mensagem += $"\n• {conflitos} pedido{(conflitos != 1 ? "s" : "")} não {(conflitos != 1 ? "puderam" : "pôde")} ser excluído{(conflitos != 1 ? "s" : "")} (já excluído{(conflitos != 1 ? "s" : "")} por outro usuário).";
+                    mensagem += $"\n• {conflitos} pedido{(conflitos != 1 ? "s" : "")} já {(conflitos != 1 ? "haviam" : "havia")} sido excluído{(conflitos != 1 ? "s" : "")} por outro usuário.";
+                if (erros > 0)
+                    mensagem += $"\n• {erros} pedido{(erros != 1 ? "s" : "")} com erro ao excluir.\n  Primeiro erro: {primeiroErro}";
 
-                MessageBox.Show(this, mensagem, "Resultado",
-                    MessageBoxButtons.OK, conflitos > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                var icone = erros > 0
+                    ? MessageBoxIcon.Error
+                    : (conflitos > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                MessageBox.Show(this, mensagem, "Resultado", MessageBoxButtons.OK, icone);
 
                 await CarregarAsync();
             }
@@ -518,6 +592,7 @@ namespace CONTROLE_DE_PEDIDOS
                 btnMarcarTodos.Enabled = true;
                 btnDesmarcarTodos.Enabled = true;
                 btnMarcarFaturados.Enabled = true;
+                btnMarcarRotas.Enabled = true;
             }
         }
 

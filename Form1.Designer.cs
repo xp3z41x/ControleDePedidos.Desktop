@@ -19,6 +19,12 @@ namespace CONTROLE_DE_PEDIDOS
         private Panel panelPedidos = null!;
         private Label lblTituloPedidos = null!;
         private Label lblContagemPedidos = null!;
+        private Panel panelFiltrosPedidos = null!;
+        private ToolStrip toolStripFiltros = null!;
+        private ToolStripDropDownButton btnFiltroVendedor = null!;
+        private ToolStripDropDownButton btnFiltroRota = null!;
+        private ToolStripDropDownButton btnFiltroEtapa = null!;
+        private ToolStripButton btnLimparFiltros = null!;
         private OptimizedDataGridView dgvPedidos = null!;
         private Button btnAlterarRota = null!;
         private Button btnExcluirPedido = null!;
@@ -111,6 +117,13 @@ namespace CONTROLE_DE_PEDIDOS
             menuExclusaoMassa.Click += MenuExclusaoMassa_Click;
             menuPedidos.DropDownItems.Add(menuExclusaoMassa);
 
+            var menuHistoricoExclusoes = new ToolStripMenuItem("Histórico de Exclusões")
+            {
+                ForeColor = Theme.TextPrimary
+            };
+            menuHistoricoExclusoes.Click += MenuHistoricoExclusoes_Click;
+            menuPedidos.DropDownItems.Add(menuHistoricoExclusoes);
+
             var menuRelatorios = new ToolStripMenuItem("RELATÓRIOS")
             {
                 ForeColor = Theme.TextPrimary
@@ -129,9 +142,21 @@ namespace CONTROLE_DE_PEDIDOS
             menuRelatorioNfe.Click += MenuRelatorioNfe_Click;
             menuRelatorios.DropDownItems.Add(menuRelatorioNfe);
 
+            var menuObservacao = new ToolStripMenuItem("OBSERVAÇÃO")
+            {
+                ForeColor = Theme.TextPrimary
+            };
+            var menuCorrigirObservacao = new ToolStripMenuItem("Corrigir Observação")
+            {
+                ForeColor = Theme.TextPrimary
+            };
+            menuCorrigirObservacao.Click += MenuCorrigirObservacao_Click;
+            menuObservacao.DropDownItems.Add(menuCorrigirObservacao);
+
             menuStrip.Items.Add(menuRotas);
             menuStrip.Items.Add(menuPedidos);
             menuStrip.Items.Add(menuRelatorios);
+            menuStrip.Items.Add(menuObservacao);
             MainMenuStrip = menuStrip;
 
             // ================================================================
@@ -268,7 +293,7 @@ namespace CONTROLE_DE_PEDIDOS
                 var lblTit = new Label
                 {
                     Text = titulo,
-                    Font = new Font("Segoe UI", 7.5f),
+                    Font = Theme.FontDetalheLabel,
                     ForeColor = Theme.TextMuted,
                     Location = new Point(cellPadX, cellY + 4),
                     AutoSize = true
@@ -278,7 +303,7 @@ namespace CONTROLE_DE_PEDIDOS
                 var lblVal = new Label
                 {
                     Text = "—",
-                    Font = new Font("Segoe UI", 10f),
+                    Font = Theme.FontDetalheValor,
                     ForeColor = Theme.TextPrimary,
                     Location = new Point(cellPadX, cellY + 19),
                     Size = new Size(cellWidth, altura - 22),
@@ -291,7 +316,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
 
             lblDetValorTotal = CriarCelula("VALOR TOTAL", 42);
-            lblDetValorTotal.Font = new Font("Segoe UI Semibold", 13f);
+            lblDetValorTotal.Font = Theme.FontDetalheDestaque;
             lblDetValorTotal.ForeColor = Theme.Accent;
 
             lblDetCidade = CriarCelula("CIDADE");
@@ -743,9 +768,108 @@ namespace CONTROLE_DE_PEDIDOS
                 BackColor = Theme.Border
             };
 
+            // ================================================================
+            // BARRA DE FILTROS (Vendedor / Rota / Etapa)
+            // ================================================================
+            panelFiltrosPedidos = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 40,
+                BackColor = Theme.BgCard,
+                Padding = new Padding(12, 0, 12, 0)
+            };
+
+            toolStripFiltros = new ToolStrip
+            {
+                Dock = DockStyle.Fill,
+                GripStyle = ToolStripGripStyle.Hidden,
+                BackColor = Theme.BgCard,
+                ForeColor = Theme.TextPrimary,
+                Font = Theme.FontRegular,
+                Renderer = new ThemeToolStripRenderer(),
+                ImageScalingSize = new Size(16, 16),
+                AutoSize = false,
+                Padding = new Padding(0)
+            };
+
+            var lblFiltrar = new ToolStripLabel("Filtrar:")
+            {
+                ForeColor = Theme.TextSecondary,
+                Font = Theme.FontSmall,
+                Margin = new Padding(4, 0, 8, 0)
+            };
+
+            btnFiltroVendedor = new ToolStripDropDownButton("Vendedor")
+            {
+                DisplayStyle = ToolStripItemDisplayStyle.Text,
+                ForeColor = Theme.TextPrimary,
+                Font = Theme.FontRegular,
+                AutoToolTip = false,
+                Margin = new Padding(0, 4, 4, 4),
+                Padding = new Padding(10, 0, 6, 0)
+            };
+            btnFiltroRota = new ToolStripDropDownButton("Rota")
+            {
+                DisplayStyle = ToolStripItemDisplayStyle.Text,
+                ForeColor = Theme.TextPrimary,
+                Font = Theme.FontRegular,
+                AutoToolTip = false,
+                Margin = new Padding(0, 4, 4, 4),
+                Padding = new Padding(10, 0, 6, 0)
+            };
+            btnFiltroEtapa = new ToolStripDropDownButton("Etapa")
+            {
+                DisplayStyle = ToolStripItemDisplayStyle.Text,
+                ForeColor = Theme.TextPrimary,
+                Font = Theme.FontRegular,
+                AutoToolTip = false,
+                Margin = new Padding(0, 4, 4, 4),
+                Padding = new Padding(10, 0, 6, 0)
+            };
+
+            btnLimparFiltros = new ToolStripButton("Limpar Filtros")
+            {
+                DisplayStyle = ToolStripItemDisplayStyle.Text,
+                ForeColor = Theme.Warning,
+                Font = Theme.FontSmall,
+                AutoToolTip = false,
+                Visible = false,
+                Alignment = ToolStripItemAlignment.Right,
+                Margin = new Padding(0, 4, 4, 4),
+                Padding = new Padding(8, 0, 8, 0)
+            };
+
+            toolStripFiltros.Items.Add(lblFiltrar);
+            toolStripFiltros.Items.Add(btnFiltroVendedor);
+            toolStripFiltros.Items.Add(btnFiltroRota);
+            toolStripFiltros.Items.Add(btnFiltroEtapa);
+            toolStripFiltros.Items.Add(btnLimparFiltros);
+
+            // DropDowns com tema e fonte próprios
+            foreach (var dd in new[] { btnFiltroVendedor.DropDown, btnFiltroRota.DropDown, btnFiltroEtapa.DropDown })
+            {
+                dd.BackColor = Theme.BgPanel;
+                dd.ForeColor = Theme.TextPrimary;
+                dd.Font = Theme.FontRegular;
+                dd.Renderer = new ThemeToolStripRenderer();
+            }
+
+            panelFiltrosPedidos.Controls.Add(toolStripFiltros);
+
+            var separadorFiltros = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 1,
+                BackColor = Theme.Border
+            };
+
+            // Ordem Dock: último .Add em Top fica colado na borda superior.
+            // Do fundo do Z-order para o topo: separadorFiltros → panelFiltrosPedidos → separadorPedidos → headerPedidos
             panelPedidos.Controls.Add(dgvPedidos);
             panelPedidos.Controls.Add(separadorPedidosInferior);
             panelPedidos.Controls.Add(panelAcoesPedidos);
+            panelPedidos.Controls.Add(separadorFiltros);
+            panelPedidos.Controls.Add(panelFiltrosPedidos);
             panelPedidos.Controls.Add(separadorPedidos);
             panelPedidos.Controls.Add(headerPedidos);
             panelPedidos.ResumeLayout(false);

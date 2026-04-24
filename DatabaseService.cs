@@ -96,7 +96,14 @@ namespace CONTROLE_DE_PEDIDOS
         public void AtualizarConfig(AppConfig novaConfig)
         {
             _config = novaConfig;
-            _config.Salvar();
+            try
+            {
+                _config.Salvar();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao salvar config.ini", ex);
+            }
             _bancoControleGarantido = false;
             _ = VerificarConexaoAsync();
         }
@@ -170,7 +177,7 @@ namespace CONTROLE_DE_PEDIDOS
             catch (Exception ex)
             {
                 _bancoControleGarantido = false;
-                System.Diagnostics.Debug.WriteLine($"Erro ao garantir a existência do banco de controle: {ex}");
+                Logger.Error("Erro ao garantir a existência do banco de controle", ex);
             }
         }
 
@@ -204,7 +211,31 @@ namespace CONTROLE_DE_PEDIDOS
                         data_aprovacao TIMESTAMP NOT NULL DEFAULT NOW()
                     );
                     ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS travado BOOLEAN NOT NULL DEFAULT FALSE;
-                    ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS em_faturamento BOOLEAN NOT NULL DEFAULT FALSE";
+                    ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS em_faturamento BOOLEAN NOT NULL DEFAULT FALSE;
+                    CREATE TABLE IF NOT EXISTS historico_exclusoes (
+                        id SERIAL PRIMARY KEY,
+                        orcamento INTEGER NOT NULL,
+                        cliente VARCHAR(300) NOT NULL DEFAULT '',
+                        nome_fantasia VARCHAR(300) NOT NULL DEFAULT '',
+                        rota VARCHAR(200) NOT NULL DEFAULT '',
+                        vendedor VARCHAR(200) NOT NULL DEFAULT '',
+                        pedido_venda INTEGER NOT NULL DEFAULT 0,
+                        nota_fiscal VARCHAR(20) NOT NULL DEFAULT '',
+                        status VARCHAR(40) NOT NULL DEFAULT '',
+                        aprovado BOOLEAN NOT NULL DEFAULT FALSE,
+                        em_separacao BOOLEAN NOT NULL DEFAULT FALSE,
+                        conferido BOOLEAN NOT NULL DEFAULT FALSE,
+                        liberado BOOLEAN NOT NULL DEFAULT FALSE,
+                        travado BOOLEAN NOT NULL DEFAULT FALSE,
+                        em_faturamento BOOLEAN NOT NULL DEFAULT FALSE,
+                        tipo_exclusao VARCHAR(10) NOT NULL DEFAULT '',
+                        usuario_windows VARCHAR(100) NOT NULL DEFAULT '',
+                        data_exclusao TIMESTAMP NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_data
+                        ON historico_exclusoes (data_exclusao DESC);
+                    CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_orcamento
+                        ON historico_exclusoes (orcamento)";
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }).ConfigureAwait(false);
         }
@@ -225,6 +256,32 @@ namespace CONTROLE_DE_PEDIDOS
             await conn.OpenAsync().ConfigureAwait(false);
             using var readOnly = new IntegraReadOnlyConnection(conn);
             return await consulta(readOnly).ConfigureAwait(false);
+        }
+
+        // =====================================================================
+        // INTEGRA - ESCRITA (USO EXCEPCIONAL)
+        // Unico ponto de escrita em integrapgsql. Usado SOMENTE pelo fluxo
+        // "Corrigir Observacao". Nao adicionar novos consumidores sem revisao.
+        // =====================================================================
+        public async Task<int> AtualizarObservacaoEstmovAsync(int pedido, string novaObservacao)
+        {
+            if (!IntegraConectado)
+                throw new InvalidOperationException($"Sem conexão com o banco {_config.BancoIntegra}.");
+            if (_config.FilialFiscal <= 0)
+                throw new InvalidOperationException("Filial Fiscal não configurada.");
+
+            using var conn = new NpgsqlConnection(_config.ConnectionStringIntegraEscrita);
+            await conn.OpenAsync().ConfigureAwait(false);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                UPDATE estmov
+                   SET observacao = @obs
+                 WHERE filial = @filial
+                   AND pedido = @pedido";
+            cmd.Parameters.AddWithValue("obs", novaObservacao);
+            cmd.Parameters.AddWithValue("filial", _config.FilialFiscal);
+            cmd.Parameters.AddWithValue("pedido", pedido);
+            return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
 
         // =====================================================================
@@ -261,6 +318,196 @@ namespace CONTROLE_DE_PEDIDOS
             using var conn = new NpgsqlConnection(_config.ConnectionStringControle);
             await conn.OpenAsync().ConfigureAwait(false);
             return await operacao(conn).ConfigureAwait(false);
+        }
+
+        // =====================================================================
+        // HISTORICO DE EXCLUSOES
+        // Lookup de NFes no integra (best-effort) + exclusao atomica
+        // (DELETE pedidos_controlados + INSERT historico_exclusoes) em
+        // transacao local. Retorna linhas afetadas pelo DELETE — 0 indica
+        // conflito de concorrencia (outro usuario ja excluiu) e nesse caso
+        // o historico NAO recebe registro falso.
+        // =====================================================================
+
+        /// <summary>
+        /// Busca em batch as notas fiscais vinculadas aos orcamentos no integra.
+        /// Retorna dict vazio silenciosamente se integra desconectado, filial fiscal
+        /// invalida, lista vazia, ou qualquer erro na consulta (com log Warn).
+        /// Nunca lanca — e best-effort para alimentar o historico.
+        /// </summary>
+        public async Task<Dictionary<int, string>> BuscarNotasFiscaisAsync(IEnumerable<int> orcamentos)
+        {
+            var lista = orcamentos?.Distinct().ToList() ?? new List<int>();
+            if (lista.Count == 0 || !IntegraConectado || _config.FilialFiscal <= 0)
+                return new Dictionary<int, string>();
+
+            try
+            {
+                var resultado = await ConsultarIntegraAsync(async conn =>
+                {
+                    var dict = new Dictionary<int, string>();
+                    using var cmd = conn.CreateCommand();
+                    var paramList = string.Join(",", lista.Select((_, i) => $"@p{i}"));
+                    cmd.CommandText = $@"
+                        SELECT observacao, nota_fiscal
+                          FROM estmov
+                         WHERE filial = @filial
+                           AND observacao IN ({paramList})";
+                    cmd.Parameters.AddWithValue("filial", _config.FilialFiscal);
+                    for (int i = 0; i < lista.Count; i++)
+                        cmd.Parameters.AddWithValue($"p{i}", lista[i].ToString());
+
+                    using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                    while (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        if (await reader.IsDBNullAsync(0).ConfigureAwait(false)) continue;
+                        if (await reader.IsDBNullAsync(1).ConfigureAwait(false)) continue;
+                        var obs = reader.GetValue(0)?.ToString()?.Trim() ?? "";
+                        if (!int.TryParse(obs, out var orc)) continue;
+                        dict[orc] = reader.GetValue(1)?.ToString() ?? "";
+                    }
+                    return dict;
+                }).ConfigureAwait(false);
+                return resultado ?? new Dictionary<int, string>();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("Falha ao buscar notas fiscais para historico de exclusao", ex);
+                return new Dictionary<int, string>();
+            }
+        }
+
+        /// <summary>
+        /// Executa DELETE do pedido em pedidos_controlados e INSERT no historico
+        /// atomicamente numa transacao. Retorna linhas afetadas pelo DELETE.
+        /// Se DELETE retornar 0 (conflito de concorrencia), o INSERT e pulado —
+        /// historico nao recebe registro falso.
+        /// </summary>
+        public async Task<int> ExcluirPedidoComHistoricoAsync(ExclusaoRegistro reg)
+        {
+            if (!ControleConectado)
+                throw new InvalidOperationException($"Sem conexão com o banco {_config.BancoControle}.");
+
+            using var conn = new NpgsqlConnection(_config.ConnectionStringControle);
+            await conn.OpenAsync().ConfigureAwait(false);
+            using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+            try
+            {
+                int linhas;
+                using (var cmdDel = conn.CreateCommand())
+                {
+                    cmdDel.Transaction = tx;
+                    cmdDel.CommandText = "DELETE FROM pedidos_controlados WHERE orcamento = @orc";
+                    cmdDel.Parameters.AddWithValue("orc", reg.Orcamento);
+                    linhas = await cmdDel.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+
+                if (linhas > 0)
+                {
+                    using var cmdIns = conn.CreateCommand();
+                    cmdIns.Transaction = tx;
+                    cmdIns.CommandText = @"
+                        INSERT INTO historico_exclusoes
+                        (orcamento, cliente, nome_fantasia, rota, vendedor, pedido_venda,
+                         nota_fiscal, status, aprovado, em_separacao, conferido, liberado,
+                         travado, em_faturamento, tipo_exclusao, usuario_windows)
+                        VALUES
+                        (@orc, @cli, @nf, @rot, @vnd, @pv, @nfe, @sta,
+                         @apr, @sep, @cnf, @lib, @trv, @fat, @tip, @usr)";
+                    cmdIns.Parameters.AddWithValue("orc", reg.Orcamento);
+                    cmdIns.Parameters.AddWithValue("cli", reg.Cliente ?? "");
+                    cmdIns.Parameters.AddWithValue("nf",  reg.NomeFantasia ?? "");
+                    cmdIns.Parameters.AddWithValue("rot", reg.Rota ?? "");
+                    cmdIns.Parameters.AddWithValue("vnd", reg.Vendedor ?? "");
+                    cmdIns.Parameters.AddWithValue("pv",  reg.PedidoVenda);
+                    cmdIns.Parameters.AddWithValue("nfe", reg.NotaFiscal ?? "");
+                    cmdIns.Parameters.AddWithValue("sta", reg.Status ?? "");
+                    cmdIns.Parameters.AddWithValue("apr", reg.Aprovado);
+                    cmdIns.Parameters.AddWithValue("sep", reg.EmSeparacao);
+                    cmdIns.Parameters.AddWithValue("cnf", reg.Conferido);
+                    cmdIns.Parameters.AddWithValue("lib", reg.Liberado);
+                    cmdIns.Parameters.AddWithValue("trv", reg.Travado);
+                    cmdIns.Parameters.AddWithValue("fat", reg.EmFaturamento);
+                    cmdIns.Parameters.AddWithValue("tip", reg.TipoExclusao ?? "");
+                    cmdIns.Parameters.AddWithValue("usr", Environment.UserName ?? "");
+                    await cmdIns.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+
+                await tx.CommitAsync().ConfigureAwait(false);
+                return linhas;
+            }
+            catch
+            {
+                try { await tx.RollbackAsync().ConfigureAwait(false); } catch { /* swallow */ }
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Lista todos os registros do historico de exclusoes ordenados
+        /// por data de exclusao (mais recentes primeiro).
+        /// </summary>
+        public async Task<List<HistoricoExclusaoItem>> ListarHistoricoExclusoesAsync()
+        {
+            if (!ControleConectado)
+                throw new InvalidOperationException($"Sem conexão com o banco {_config.BancoControle}.");
+
+            var resultado = await ExecutarControleAsync(async conn =>
+            {
+                var lista = new List<HistoricoExclusaoItem>();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT id, orcamento, cliente, nome_fantasia, rota, vendedor,
+                           pedido_venda, nota_fiscal, status,
+                           aprovado, em_separacao, conferido, liberado, travado, em_faturamento,
+                           tipo_exclusao, usuario_windows, data_exclusao
+                      FROM historico_exclusoes
+                     ORDER BY data_exclusao DESC";
+                using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    lista.Add(new HistoricoExclusaoItem
+                    {
+                        Id             = reader.GetInt32(0),
+                        Orcamento      = reader.GetInt32(1),
+                        Cliente        = reader.GetString(2),
+                        NomeFantasia   = reader.GetString(3),
+                        Rota           = reader.GetString(4),
+                        Vendedor       = reader.GetString(5),
+                        PedidoVenda    = reader.GetInt32(6),
+                        NotaFiscal     = reader.GetString(7),
+                        Status         = reader.GetString(8),
+                        Aprovado       = reader.GetBoolean(9),
+                        EmSeparacao    = reader.GetBoolean(10),
+                        Conferido      = reader.GetBoolean(11),
+                        Liberado       = reader.GetBoolean(12),
+                        Travado        = reader.GetBoolean(13),
+                        EmFaturamento  = reader.GetBoolean(14),
+                        TipoExclusao   = reader.GetString(15),
+                        UsuarioWindows = reader.GetString(16),
+                        DataExclusao   = reader.GetDateTime(17),
+                    });
+                }
+                return lista;
+            }).ConfigureAwait(false);
+
+            return resultado ?? new List<HistoricoExclusaoItem>();
+        }
+
+        /// <summary>
+        /// DELETE destrutivo: remove definitivamente do historico_exclusoes
+        /// todos os registros com data_exclusao anterior ao corte informado.
+        /// Retorna o numero de linhas removidas.
+        /// </summary>
+        public async Task<int> LimparHistoricoExclusoesAntigoAsync(DateTime corte)
+        {
+            return await ExecutarControleComLinhasAsync(async conn =>
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "DELETE FROM historico_exclusoes WHERE data_exclusao < @corte";
+                cmd.Parameters.AddWithValue("corte", corte);
+                return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }).ConfigureAwait(false);
         }
 
         public async Task<bool> TestarConexao(AppConfig configTeste)

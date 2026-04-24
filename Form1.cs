@@ -10,11 +10,34 @@ namespace CONTROLE_DE_PEDIDOS
         private HashSet<int> _aprovados = [];
         private bool _recarregando;
 
+        // Master list e estado dos filtros (persistidos via FilterStore)
+        private List<PedidoControlado> _pedidosTodos = [];
+        private HashSet<string> _filtroVendedores = new(StringComparer.CurrentCultureIgnoreCase);
+        private HashSet<string> _filtroRotas = new(StringComparer.CurrentCultureIgnoreCase);
+        private HashSet<EtapaPedido> _filtroEtapas = [];
+
+        private const string SemVendedor = "(Sem vendedor)";
+        private const string SemRota = "(Sem rota)";
+
         public Form1()
         {
             InitializeComponent();
             _db = DatabaseService.Instancia;
             _db.StatusAlterado += Db_StatusAlterado;
+            RestaurarFiltrosDaPersistencia();
+            WireDropDownMacros();
+            AtualizarIndicadoresVisuais();
+        }
+
+        private void RestaurarFiltrosDaPersistencia()
+        {
+            foreach (var v in FilterStore.Vendedores) _filtroVendedores.Add(v);
+            foreach (var r in FilterStore.Rotas) _filtroRotas.Add(r);
+            foreach (var e in FilterStore.Etapas)
+            {
+                if (Enum.TryParse<EtapaPedido>(e, out var etapa))
+                    _filtroEtapas.Add(etapa);
+            }
         }
 
         protected override void OnShown(EventArgs e)
@@ -44,7 +67,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Erro ao carregar orçamentos ignorados: {ex}");
+                Logger.Error("Erro ao carregar orçamentos ignorados", ex);
                 _ignorados = [];
             }
         }
@@ -139,7 +162,7 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 dgvOrcamentos.DataSource = null;
                 lblContagem.Text = "";
-                System.Diagnostics.Debug.WriteLine($"Erro ao carregar orçamentos: {ex}");
+                Logger.Error("Erro ao carregar orçamentos", ex);
             }
         }
 
@@ -164,7 +187,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Erro ao carregar orçamentos aprovados: {ex}");
+                Logger.Error("Erro ao carregar orçamentos aprovados", ex);
                 _aprovados = [];
             }
         }
@@ -206,61 +229,88 @@ namespace CONTROLE_DE_PEDIDOS
 
                 var dados = lista ?? [];
 
-                // Buscar pedido_venda do integra para cada pedido
+                // Buscar pedido_venda + vendedor do integra para cada pedido
                 if (dados.Count > 0 && _db.IntegraConectado)
                 {
                     try
                     {
                         var config = _db.Config;
-                        var faturados = await _db.ConsultarIntegraAsync(async conn =>
+                        var enriquecimento = await _db.ConsultarIntegraAsync(async conn =>
                         {
-                            var dict = new Dictionary<int, int>();
+                            var dict = new Dictionary<int, (int pedidoVenda, string vendedor)>();
                             using var cmd = conn.CreateCommand();
                             var paramList = string.Join(",", dados.Select((_, i) => $"@p{i}"));
-                            cmd.CommandText = $"SELECT orcamento, pedido_venda FROM estorc WHERE filial = @filial AND orcamento IN ({paramList})";
+                            cmd.CommandText = $@"
+                                SELECT e.orcamento, e.pedido_venda, COALESCE(f.nome, '') AS vendedor
+                                FROM estorc e
+                                LEFT JOIN cadfun f ON f.funcionario = e.vendedor
+                                WHERE e.filial = @filial AND e.orcamento IN ({paramList})";
                             cmd.Parameters.AddWithValue("filial", config.Filial);
                             for (int i = 0; i < dados.Count; i++)
                                 cmd.Parameters.AddWithValue($"p{i}", dados[i].Orcamento);
                             using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
                             while (await reader.ReadAsync().ConfigureAwait(false))
-                                dict[reader.GetInt32(0)] = reader.GetInt32(1);
+                            {
+                                int orc = reader.GetInt32(0);
+                                int pv = await reader.IsDBNullAsync(1).ConfigureAwait(false) ? 0 : reader.GetInt32(1);
+                                string vend = await reader.IsDBNullAsync(2).ConfigureAwait(false) ? "" : reader.GetString(2);
+                                dict[orc] = (pv, vend);
+                            }
                             return dict;
                         });
 
-                        if (faturados != null)
+                        if (enriquecimento != null)
                         {
                             foreach (var p in dados)
                             {
-                                if (faturados.TryGetValue(p.Orcamento, out int pv))
-                                    p.PedidoVenda = pv;
+                                if (enriquecimento.TryGetValue(p.Orcamento, out var info))
+                                {
+                                    p.PedidoVenda = info.pedidoVenda;
+                                    p.Vendedor = info.vendedor;
+                                }
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Erro ao buscar pedido_venda: {ex}");
+                        Logger.Warn("Erro ao buscar pedido_venda/vendedor", ex);
                     }
                 }
 
-                // Se já existe uma lista no grid, atualizar in-place (preserva sort, seleção, scroll)
-                if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaExistente)
-                {
-                    listaExistente.AtualizarInPlace(dados, p => p.Orcamento, (src, dst) => dst.CopiarDe(src));
-                    lblContagemPedidos.Text = $"{listaExistente.Count} registro{(listaExistente.Count != 1 ? "s" : "")}";
-                }
-                else
-                {
-                    // Primeira carga: criar novo DataSource
-                    dgvPedidos.DataSource = new SortableBindingList<PedidoControlado>(dados);
-                    lblContagemPedidos.Text = $"{dados.Count} registro{(dados.Count != 1 ? "s" : "")}";
-                }
+                // Atualizar master list preservando referências existentes quando possível
+                AtualizarMasterList(dados);
+
+                // Repovoar dropdowns de filtro e aplicar filtros sobre a nova master
+                AtualizarOpcoesDropdowns();
+                AplicarFiltros();
             }
             catch (Exception ex)
             {
+                _pedidosTodos = [];
                 dgvPedidos.DataSource = null;
                 lblContagemPedidos.Text = "";
-                System.Diagnostics.Debug.WriteLine($"Erro ao carregar pedidos: {ex}");
+                Logger.Error("Erro ao carregar pedidos", ex);
             }
+        }
+
+        private void AtualizarMasterList(List<PedidoControlado> novos)
+        {
+            // Preserva referências de objetos existentes (copia campos) para manter o binding
+            var existentesPorOrc = _pedidosTodos.ToDictionary(p => p.Orcamento);
+            var resultado = new List<PedidoControlado>(novos.Count);
+            foreach (var novo in novos)
+            {
+                if (existentesPorOrc.TryGetValue(novo.Orcamento, out var existente))
+                {
+                    existente.CopiarDe(novo);
+                    resultado.Add(existente);
+                }
+                else
+                {
+                    resultado.Add(novo);
+                }
+            }
+            _pedidosTodos = resultado;
         }
 
         private async Task RecarregarDadosAsync(bool recarregarOrcamentos = true, bool recarregarPedidos = true)
@@ -332,19 +382,17 @@ namespace CONTROLE_DE_PEDIDOS
                         lblContagem.Text = $"{listaOrcamentos.Count} registro{(listaOrcamentos.Count != 1 ? "s" : "")}";
                     }
 
-                    // Adiciona no grid de pedidos
-                    if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaPedidos)
+                    // Adiciona na master list (Vendedor será preenchido no próximo refresh)
+                    var novoPedido = new PedidoControlado
                     {
-                        var novoPedido = new PedidoControlado
-                        {
-                            Orcamento = orc.Orcamento,
-                            Cliente = orc.Nome,
-                            NomeFantasia = orc.NomeFantasia,
-                            Rota = dialog.RotaSelecionada
-                        };
-                        listaPedidos.Insert(0, novoPedido); // Insere no topo para manter a ordem decrescente
-                        lblContagemPedidos.Text = $"{listaPedidos.Count} registro{(listaPedidos.Count != 1 ? "s" : "")}";
-                    }
+                        Orcamento = orc.Orcamento,
+                        Cliente = orc.Nome,
+                        NomeFantasia = orc.NomeFantasia,
+                        Rota = dialog.RotaSelecionada
+                    };
+                    _pedidosTodos.Insert(0, novoPedido);
+                    AtualizarOpcoesDropdowns();
+                    AplicarFiltros();
                 }
                 else
                 {
@@ -493,10 +541,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     // Atualiza o objeto na lista e notifica a grid
                     pedido.Rota = dialog.RotaSelecionada;
-                    if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaPedidos)
-                    {
-                        listaPedidos.ResetItem(listaPedidos.IndexOf(pedido));
-                    }
+                    AplicarFiltros();
                 }
                 else
                 {
@@ -518,7 +563,7 @@ namespace CONTROLE_DE_PEDIDOS
             if (!_db.ControleConectado) return;
 
             var confirm = MessageBox.Show(this,
-                $"ATENÇÃO: Esta ação é irreversível!\n\nExcluir o pedido {pedido.Orcamento} ({pedido.Cliente}) do controle?\n\nO orçamento voltará para a lista de pendentes.",
+                $"ATENÇÃO: Esta ação é irreversível!\n\nExcluir o pedido {pedido.Orcamento} ({pedido.Cliente}) do controle?\n\nO orçamento voltará para a lista de pendentes caso não esteja faturado!",
                 "Excluir Pedido",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
 
@@ -526,22 +571,37 @@ namespace CONTROLE_DE_PEDIDOS
 
             try
             {
-                var linhas = await _db.ExecutarControleComLinhasAsync(async conn =>
-                {
-                    using var cmd = conn.CreateCommand();
-                    cmd.CommandText = "DELETE FROM pedidos_controlados WHERE orcamento = @orc";
-                    cmd.Parameters.AddWithValue("orc", pedido.Orcamento);
-                    return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                });
+                // Lookup best-effort da NFe (nunca bloqueia exclusao)
+                var nfes = await _db.BuscarNotasFiscaisAsync(new[] { pedido.Orcamento });
+                nfes.TryGetValue(pedido.Orcamento, out var nfe);
+
+                var reg = new ExclusaoRegistro(
+                    Orcamento: pedido.Orcamento,
+                    Cliente: pedido.Cliente,
+                    NomeFantasia: pedido.NomeFantasia,
+                    Rota: pedido.Rota,
+                    Vendedor: pedido.Vendedor,
+                    PedidoVenda: pedido.PedidoVenda,
+                    NotaFiscal: nfe ?? "",
+                    Status: ExclusaoRegistro.CalcularStatus(
+                        pedido.Aprovado, pedido.EmSeparacao, pedido.Conferido,
+                        pedido.Liberado, pedido.Travado, pedido.EmFaturamento,
+                        pedido.PedidoVenda),
+                    Aprovado: pedido.Aprovado,
+                    EmSeparacao: pedido.EmSeparacao,
+                    Conferido: pedido.Conferido,
+                    Liberado: pedido.Liberado,
+                    Travado: pedido.Travado,
+                    EmFaturamento: pedido.EmFaturamento,
+                    TipoExclusao: ExclusaoRegistro.TipoManual);
+
+                var linhas = await _db.ExcluirPedidoComHistoricoAsync(reg);
 
                 if (linhas > 0)
                 {
-                    // Remove o item da grid de pedidos e recarrega a de orçamentos
-                    if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaPedidos)
-                    {
-                        listaPedidos.Remove(pedido);
-                        lblContagemPedidos.Text = $"{listaPedidos.Count} registro{(listaPedidos.Count != 1 ? "s" : "")}";
-                    }
+                    _pedidosTodos.RemoveAll(p => p.Orcamento == pedido.Orcamento);
+                    AtualizarOpcoesDropdowns();
+                    AplicarFiltros();
                     await CarregarOrcamentosAsync();
                 }
                 else
@@ -590,10 +650,7 @@ namespace CONTROLE_DE_PEDIDOS
                 if (linhas > 0)
                 {
                     pedido.Travado = true;
-                    if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaPedidos)
-                    {
-                        listaPedidos.ResetItem(listaPedidos.IndexOf(pedido));
-                    }
+                    AplicarFiltros();
                 }
                 else
                 {
@@ -641,10 +698,7 @@ namespace CONTROLE_DE_PEDIDOS
                 if (linhas > 0)
                 {
                     pedido.Travado = false;
-                    if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaPedidos)
-                    {
-                        listaPedidos.ResetItem(listaPedidos.IndexOf(pedido));
-                    }
+                    AplicarFiltros();
                 }
                 else
                 {
@@ -714,10 +768,7 @@ namespace CONTROLE_DE_PEDIDOS
                         case "conferido": pedido.Conferido = true; break;
                         case "liberado": pedido.Liberado = true; break;
                     }
-                    if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaPedidos)
-                    {
-                        listaPedidos.ResetItem(listaPedidos.IndexOf(pedido));
-                    }
+                    AplicarFiltros();
                 }
                 else
                 {
@@ -787,10 +838,7 @@ namespace CONTROLE_DE_PEDIDOS
                         case "em_separacao": pedido.EmSeparacao = false; break;
                         case "aprovado": pedido.Aprovado = false; break;
                     }
-                    if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaPedidos)
-                    {
-                        listaPedidos.ResetItem(listaPedidos.IndexOf(pedido));
-                    }
+                    AplicarFiltros();
                 }
                 else
                 {
@@ -845,10 +893,7 @@ namespace CONTROLE_DE_PEDIDOS
                 if (linhas > 0)
                 {
                     pedido.EmFaturamento = true;
-                    if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaPedidos)
-                    {
-                        listaPedidos.ResetItem(listaPedidos.IndexOf(pedido));
-                    }
+                    AplicarFiltros();
                 }
                 else
                 {
@@ -889,10 +934,7 @@ namespace CONTROLE_DE_PEDIDOS
                 if (linhas > 0)
                 {
                     pedido.EmFaturamento = false;
-                    if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> listaPedidos)
-                    {
-                        listaPedidos.ResetItem(listaPedidos.IndexOf(pedido));
-                    }
+                    AplicarFiltros();
                 }
                 else
                 {
@@ -941,10 +983,10 @@ namespace CONTROLE_DE_PEDIDOS
 
             if (orcamento == null || orcamento == _orcamentoDetalheAtual) return;
             _orcamentoDetalheAtual = orcamento.Value;
-            CarregarDetalhes(orcamento.Value);
+            _ = CarregarDetalhesAsync(orcamento.Value);
         }
 
-        private async void CarregarDetalhes(int orcamento)
+        private async Task CarregarDetalhesAsync(int orcamento)
         {
             if (!_db.IntegraConectado) return;
 
@@ -969,14 +1011,14 @@ namespace CONTROLE_DE_PEDIDOS
 
                     return new DetalhesOrcamento
                     {
-                        Cidade = await reader.IsDBNullAsync(0) ? "" : reader.GetString(0),
-                        Estado = await reader.IsDBNullAsync(1) ? "" : reader.GetString(1),
-                        ValorTotal = await reader.IsDBNullAsync(2) ? 0m : reader.GetDecimal(2),
-                        Texto01 = await reader.IsDBNullAsync(3) ? "" : reader.GetString(3),
-                        Texto02 = await reader.IsDBNullAsync(4) ? "" : reader.GetString(4),
-                        Texto03 = await reader.IsDBNullAsync(5) ? "" : reader.GetString(5),
-                        Texto04 = await reader.IsDBNullAsync(6) ? "" : reader.GetString(6),
-                        Observacao = await reader.IsDBNullAsync(7) ? "" : reader.GetString(7),
+                        Cidade = await reader.IsDBNullAsync(0).ConfigureAwait(false) ? "" : reader.GetString(0),
+                        Estado = await reader.IsDBNullAsync(1).ConfigureAwait(false) ? "" : reader.GetString(1),
+                        ValorTotal = await reader.IsDBNullAsync(2).ConfigureAwait(false) ? 0m : reader.GetDecimal(2),
+                        Texto01 = await reader.IsDBNullAsync(3).ConfigureAwait(false) ? "" : reader.GetString(3),
+                        Texto02 = await reader.IsDBNullAsync(4).ConfigureAwait(false) ? "" : reader.GetString(4),
+                        Texto03 = await reader.IsDBNullAsync(5).ConfigureAwait(false) ? "" : reader.GetString(5),
+                        Texto04 = await reader.IsDBNullAsync(6).ConfigureAwait(false) ? "" : reader.GetString(6),
+                        Observacao = await reader.IsDBNullAsync(7).ConfigureAwait(false) ? "" : reader.GetString(7),
                         Vendedor = reader.GetString(8)
                     };
                 });
@@ -1003,7 +1045,7 @@ namespace CONTROLE_DE_PEDIDOS
             catch (Exception ex)
             {
                 LimparDetalhes();
-                System.Diagnostics.Debug.WriteLine($"Erro ao carregar detalhes do orçamento {orcamento}: {ex}");
+                Logger.Warn($"Erro ao carregar detalhes do orçamento {orcamento}", ex);
             }
         }
 
@@ -1050,6 +1092,19 @@ namespace CONTROLE_DE_PEDIDOS
             }
         }
 
+        private void MenuHistoricoExclusoes_Click(object? sender, EventArgs e)
+        {
+            if (!_db.ControleConectado)
+            {
+                MessageBox.Show(this, "Sem conexão com o banco de controle.", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using var form = new HistoricoExclusoesForm();
+            form.ShowDialog(this);
+        }
+
         private void MenuRelatorioCarga_Click(object? sender, EventArgs e)
         {
             if (!_db.ControleConectado)
@@ -1076,6 +1131,26 @@ namespace CONTROLE_DE_PEDIDOS
             form.ShowDialog(this);
         }
 
+        private void MenuCorrigirObservacao_Click(object? sender, EventArgs e)
+        {
+            if (!_db.IntegraConectado)
+            {
+                MessageBox.Show(this, $"Sem conexão com o banco {_db.Config.BancoIntegra}.", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (_db.Config.FilialFiscal <= 0)
+            {
+                MessageBox.Show(this,
+                    "Filial Fiscal não configurada. Acesse a Configuração para definir.",
+                    "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using var dialog = new CorrigirObservacaoDialog();
+            dialog.ShowDialog(this);
+        }
+
         private void BtnConfig_Click(object? sender, EventArgs e)
         {
             using var dialog = new ConfigDialog(_db.Config);
@@ -1091,6 +1166,278 @@ namespace CONTROLE_DE_PEDIDOS
             _db.Dispose();
             base.OnFormClosed(e);
         }
+
+        // ================================================================
+        // FILTROS DO GRID DE PEDIDOS
+        // ================================================================
+
+        private static string NormalizarVendedor(string? s) =>
+            string.IsNullOrWhiteSpace(s) ? SemVendedor : s.Trim();
+
+        private static string NormalizarRota(string? s) =>
+            string.IsNullOrWhiteSpace(s) ? SemRota : s.Trim();
+
+        private bool PassaFiltros(PedidoControlado p)
+        {
+            if (_filtroVendedores.Count > 0 && !_filtroVendedores.Contains(NormalizarVendedor(p.Vendedor)))
+                return false;
+            if (_filtroRotas.Count > 0 && !_filtroRotas.Contains(NormalizarRota(p.Rota)))
+                return false;
+            if (_filtroEtapas.Count > 0 && !_filtroEtapas.Contains(p.EtapaAtual))
+                return false;
+            return true;
+        }
+
+        private void AplicarFiltros()
+        {
+            var filtrados = _pedidosTodos.Where(PassaFiltros).ToList();
+
+            if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> existente)
+            {
+                existente.AtualizarInPlace(filtrados, p => p.Orcamento, (src, dst) => dst.CopiarDe(src));
+            }
+            else
+            {
+                dgvPedidos.DataSource = new SortableBindingList<PedidoControlado>(filtrados);
+            }
+
+            int total = _pedidosTodos.Count;
+            int mostrados = filtrados.Count;
+            bool filtrando = _filtroVendedores.Count > 0 || _filtroRotas.Count > 0 || _filtroEtapas.Count > 0;
+            if (filtrando)
+                lblContagemPedidos.Text = $"{mostrados} de {total} registro{(total != 1 ? "s" : "")}";
+            else
+                lblContagemPedidos.Text = $"{total} registro{(total != 1 ? "s" : "")}";
+
+            AtualizarIndicadoresVisuais();
+            PersistirFiltros();
+        }
+
+        private void PersistirFiltros()
+        {
+            FilterStore.SalvarDebounced(
+                _filtroVendedores,
+                _filtroRotas,
+                _filtroEtapas.Select(e => e.ToString()));
+        }
+
+        private void AtualizarOpcoesDropdowns()
+        {
+            PopularDropDownStrings(
+                btnFiltroVendedor,
+                _pedidosTodos.Select(p => NormalizarVendedor(p.Vendedor)),
+                _filtroVendedores);
+
+            PopularDropDownStrings(
+                btnFiltroRota,
+                _pedidosTodos.Select(p => NormalizarRota(p.Rota)),
+                _filtroRotas);
+
+            PopularDropDownEtapas(btnFiltroEtapa, _filtroEtapas);
+        }
+
+        private void PopularDropDownStrings(
+            ToolStripDropDownButton botao,
+            IEnumerable<string> opcoesDataset,
+            HashSet<string> selecionados)
+        {
+            // Preserva itens macro (primeiros 2: "Marcar/Limpar" + Separator)
+            int macrosCount = ContarMacros(botao);
+            while (botao.DropDownItems.Count > macrosCount)
+                botao.DropDownItems.RemoveAt(macrosCount);
+
+            var todas = new HashSet<string>(opcoesDataset, StringComparer.CurrentCultureIgnoreCase);
+            foreach (var s in selecionados) todas.Add(s); // manter fantasmas
+
+            foreach (var v in todas.OrderBy(s => s, StringComparer.CurrentCultureIgnoreCase))
+            {
+                var item = new ToolStripMenuItem(v)
+                {
+                    CheckOnClick = true,
+                    Checked = selecionados.Contains(v),
+                    ForeColor = Theme.TextPrimary
+                };
+                var valor = v;
+                item.CheckedChanged += (_, _) =>
+                {
+                    if (item.Checked) selecionados.Add(valor);
+                    else selecionados.Remove(valor);
+                    AplicarFiltros();
+                };
+                botao.DropDownItems.Add(item);
+            }
+        }
+
+        private void PopularDropDownEtapas(ToolStripDropDownButton botao, HashSet<EtapaPedido> selecionados)
+        {
+            int macrosCount = ContarMacros(botao);
+            while (botao.DropDownItems.Count > macrosCount)
+                botao.DropDownItems.RemoveAt(macrosCount);
+
+            // Ordem deliberada: fluxo natural do pedido
+            var etapasEmOrdem = new[]
+            {
+                EtapaPedido.Aprovado,
+                EtapaPedido.EmSeparacao,
+                EtapaPedido.Conferido,
+                EtapaPedido.LiberadoParaFaturamento,
+                EtapaPedido.Faturado,
+                EtapaPedido.NaoAprovado
+            };
+
+            foreach (var etapa in etapasEmOrdem)
+            {
+                var item = new ToolStripMenuItem(etapa.LabelAmigavel())
+                {
+                    CheckOnClick = true,
+                    Checked = selecionados.Contains(etapa),
+                    ForeColor = Theme.TextPrimary
+                };
+                var valor = etapa;
+                item.CheckedChanged += (_, _) =>
+                {
+                    if (item.Checked) selecionados.Add(valor);
+                    else selecionados.Remove(valor);
+                    AplicarFiltros();
+                };
+                botao.DropDownItems.Add(item);
+            }
+        }
+
+        private static int ContarMacros(ToolStripDropDownButton botao)
+        {
+            // Macros são: item macro + separator (sempre os 2 primeiros se presentes)
+            int count = 0;
+            if (botao.DropDownItems.Count > 0 && botao.DropDownItems[0].Tag as string == "macro") count++;
+            if (botao.DropDownItems.Count > 1 && botao.DropDownItems[1] is ToolStripSeparator) count++;
+            return count;
+        }
+
+        private void WireDropDownMacros()
+        {
+            // Adiciona (uma vez) o item "(Marcar todos / Limpar)" + separador em cada dropdown
+            AdicionarMacro(btnFiltroVendedor, () => ToggleMacroStrings(btnFiltroVendedor, _filtroVendedores));
+            AdicionarMacro(btnFiltroRota, () => ToggleMacroStrings(btnFiltroRota, _filtroRotas));
+            AdicionarMacro(btnFiltroEtapa, () => ToggleMacroEtapas());
+
+            btnLimparFiltros.Click += (_, _) => LimparTodosFiltros();
+        }
+
+        private static void AdicionarMacro(ToolStripDropDownButton botao, Action onClick)
+        {
+            var macro = new ToolStripMenuItem("(Marcar todos)")
+            {
+                Tag = "macro",
+                ForeColor = Theme.TextSecondary
+            };
+            macro.Click += (_, _) => onClick();
+            botao.DropDownItems.Add(macro);
+            botao.DropDownItems.Add(new ToolStripSeparator());
+
+            botao.DropDownOpening += (_, _) =>
+            {
+                bool algumMarcado = false;
+                for (int i = ContarMacros(botao); i < botao.DropDownItems.Count; i++)
+                {
+                    if (botao.DropDownItems[i] is ToolStripMenuItem mi && mi.Checked) { algumMarcado = true; break; }
+                }
+                macro.Text = algumMarcado ? "(Limpar)" : "(Marcar todos)";
+            };
+        }
+
+        private void ToggleMacroStrings(ToolStripDropDownButton botao, HashSet<string> selecionados)
+        {
+            int macrosCount = ContarMacros(botao);
+            bool algumMarcado = selecionados.Count > 0;
+
+            if (algumMarcado)
+            {
+                selecionados.Clear();
+                for (int i = macrosCount; i < botao.DropDownItems.Count; i++)
+                    if (botao.DropDownItems[i] is ToolStripMenuItem mi) mi.Checked = false;
+            }
+            else
+            {
+                for (int i = macrosCount; i < botao.DropDownItems.Count; i++)
+                    if (botao.DropDownItems[i] is ToolStripMenuItem mi) mi.Checked = true;
+            }
+        }
+
+        private void ToggleMacroEtapas()
+        {
+            int macrosCount = ContarMacros(btnFiltroEtapa);
+            bool algumMarcado = _filtroEtapas.Count > 0;
+
+            if (algumMarcado)
+            {
+                _filtroEtapas.Clear();
+                for (int i = macrosCount; i < btnFiltroEtapa.DropDownItems.Count; i++)
+                    if (btnFiltroEtapa.DropDownItems[i] is ToolStripMenuItem mi) mi.Checked = false;
+            }
+            else
+            {
+                for (int i = macrosCount; i < btnFiltroEtapa.DropDownItems.Count; i++)
+                    if (btnFiltroEtapa.DropDownItems[i] is ToolStripMenuItem mi) mi.Checked = true;
+            }
+        }
+
+        private void LimparTodosFiltros()
+        {
+            _filtroVendedores.Clear();
+            _filtroRotas.Clear();
+            _filtroEtapas.Clear();
+            // Desmarcar itens visuais sem re-popular
+            DesmarcarItens(btnFiltroVendedor);
+            DesmarcarItens(btnFiltroRota);
+            DesmarcarItens(btnFiltroEtapa);
+            AplicarFiltros();
+        }
+
+        private static void DesmarcarItens(ToolStripDropDownButton botao)
+        {
+            int macrosCount = ContarMacros(botao);
+            for (int i = macrosCount; i < botao.DropDownItems.Count; i++)
+                if (botao.DropDownItems[i] is ToolStripMenuItem mi && mi.Checked) mi.Checked = false;
+        }
+
+        private void AtualizarIndicadoresVisuais()
+        {
+            AtualizarBotaoFiltro(btnFiltroVendedor, "Vendedor", _filtroVendedores.Count);
+            AtualizarBotaoFiltro(btnFiltroRota, "Rota", _filtroRotas.Count);
+            AtualizarBotaoFiltro(btnFiltroEtapa, "Etapa", _filtroEtapas.Count);
+            btnLimparFiltros.Visible =
+                _filtroVendedores.Count > 0 || _filtroRotas.Count > 0 || _filtroEtapas.Count > 0;
+        }
+
+        private static void AtualizarBotaoFiltro(ToolStripDropDownButton botao, string label, int qtd)
+        {
+            if (qtd > 0)
+            {
+                botao.Text = $"{label} ({qtd})";
+                botao.Font = Theme.FontRegularBold;
+                botao.ForeColor = Theme.Accent;
+            }
+            else
+            {
+                botao.Text = label;
+                botao.Font = Theme.FontRegular;
+                botao.ForeColor = Theme.TextPrimary;
+            }
+        }
+    }
+
+    public static class EtapaPedidoExt
+    {
+        public static string LabelAmigavel(this EtapaPedido e) => e switch
+        {
+            EtapaPedido.NaoAprovado => "(Não aprovado)",
+            EtapaPedido.Aprovado => "Aprovados",
+            EtapaPedido.EmSeparacao => "Em Separação",
+            EtapaPedido.Conferido => "Conferidos",
+            EtapaPedido.LiberadoParaFaturamento => "Lib. P/ Faturamento",
+            EtapaPedido.Faturado => "Faturados",
+            _ => e.ToString()
+        };
     }
 
     public class OrcamentoResumo
@@ -1100,12 +1447,23 @@ namespace CONTROLE_DE_PEDIDOS
         public string NomeFantasia { get; set; } = "";
     }
 
+    public enum EtapaPedido
+    {
+        NaoAprovado,
+        Aprovado,
+        EmSeparacao,
+        Conferido,
+        LiberadoParaFaturamento,
+        Faturado
+    }
+
     public class PedidoControlado
     {
         public int Orcamento { get; set; }
         public string Cliente { get; set; } = "";
         public string NomeFantasia { get; set; } = "";
         public string Rota { get; set; } = "";
+        public string Vendedor { get; set; } = "";
         public bool Aprovado { get; set; }
         public bool EmSeparacao { get; set; }
         public bool Conferido { get; set; }
@@ -1120,11 +1478,27 @@ namespace CONTROLE_DE_PEDIDOS
         public string LiberadoTexto => Travado ? "TRAVADO" : (Liberado ? "SIM" : "NÃO");
         public string FaturadoTexto => PedidoVenda > 0 ? PedidoVenda.ToString() : (EmFaturamento ? "EM FATURAMENTO" : "NÃO");
 
+        // Etapa atual discreta: flag marcada true com as posteriores em false.
+        // "Lib. P/ Faturamento" engloba em_faturamento=true. "Faturado" = PedidoVenda>0.
+        public EtapaPedido EtapaAtual
+        {
+            get
+            {
+                if (PedidoVenda > 0) return EtapaPedido.Faturado;
+                if (Liberado) return EtapaPedido.LiberadoParaFaturamento;
+                if (Conferido) return EtapaPedido.Conferido;
+                if (EmSeparacao) return EtapaPedido.EmSeparacao;
+                if (Aprovado) return EtapaPedido.Aprovado;
+                return EtapaPedido.NaoAprovado;
+            }
+        }
+
         public void CopiarDe(PedidoControlado outro)
         {
             Cliente = outro.Cliente;
             NomeFantasia = outro.NomeFantasia;
             Rota = outro.Rota;
+            Vendedor = outro.Vendedor;
             Aprovado = outro.Aprovado;
             EmSeparacao = outro.EmSeparacao;
             Conferido = outro.Conferido;

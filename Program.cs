@@ -8,11 +8,24 @@ namespace CONTROLE_DE_PEDIDOS
         [STAThread]
         static void Main()
         {
-            // To customize application configuration such as set high DPI settings or default font,
-            // see https://aka.ms/applicationconfiguration.
+            // Captura excecoes nao tratadas para o log rotativo.
+            Application.ThreadException += (_, e) =>
+                Logger.Error("Exceção não tratada (UI thread)", e.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+                Logger.Error("Exceção não tratada (AppDomain)", e.ExceptionObject as Exception);
+
+            Logger.Info("=== Aplicação iniciada ===");
+
+            // HighDpiMode vem do csproj (<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>).
             ApplicationConfiguration.Initialize();
             ColumnWidthStore.Carregar();
-            Application.ApplicationExit += (_, _) => ColumnWidthStore.Flush();
+            FilterStore.Carregar();
+            Application.ApplicationExit += (_, _) =>
+            {
+                ColumnWidthStore.Flush();
+                FilterStore.Flush();
+                Logger.Info("=== Aplicação encerrada ===");
+            };
             Application.Run(new Form1());
         }
     }

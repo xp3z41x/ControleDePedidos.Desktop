@@ -2,6 +2,7 @@
 [Bb]in/
 [Oo]bj/
 publish/
+installer/output/
 
 ## NuGet
 packages/

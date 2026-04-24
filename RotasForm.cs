@@ -222,7 +222,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Erro ao carregar rotas: {ex.Message}");
+                Logger.Error("Erro ao carregar rotas", ex);
             }
         }
 

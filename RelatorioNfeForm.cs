@@ -319,7 +319,7 @@ namespace CONTROLE_DE_PEDIDOS
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Erro ao buscar NF-e do integra: {ex}");
+                        Logger.Warn("Erro ao buscar NF-e do integra", ex);
                     }
                 }
 
@@ -510,7 +510,7 @@ namespace CONTROLE_DE_PEDIDOS
                 string.Compare(a.Cliente, b.Cliente, StringComparison.OrdinalIgnoreCase));
 
             var doc = new RelatorioNfePrintDoc(selecionados);
-            var preview = new PrintPreviewDialog
+            using var preview = new PrintPreviewDialog
             {
                 Document = doc,
                 WindowState = FormWindowState.Maximized

@@ -22,11 +22,15 @@ namespace CONTROLE_DE_PEDIDOS
             StringAlignment.Center, StringAlignment.Center, StringAlignment.Center
         ];
 
+        private static readonly PaperSize A4 = new("A4", 827, 1169) { RawKind = (int)PaperKind.A4 };
+
         public RelatorioNfePrintDoc(List<PedidoNfe> pedidos)
         {
             _pedidos = pedidos;
             DefaultPageSettings.Landscape = true;
             DefaultPageSettings.Margins = new Margins(40, 40, 40, 40);
+            DefaultPageSettings.PaperSize = A4;
+            OriginAtMargins = false;
         }
 
         protected override void OnBeginPrint(PrintEventArgs e)
@@ -40,6 +44,8 @@ namespace CONTROLE_DE_PEDIDOS
         {
             base.OnPrintPage(e);
             var g = e.Graphics!;
+            g.ResetTransform();
+            g.PageUnit = GraphicsUnit.Display;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
 
             var area = e.MarginBounds;
@@ -56,7 +62,7 @@ namespace CONTROLE_DE_PEDIDOS
             const float paddingCelula = 4f;
 
             // === TÍTULO ===
-            var sfCenter = new StringFormat { Alignment = StringAlignment.Center };
+            using var sfCenter = new StringFormat { Alignment = StringAlignment.Center };
             g.DrawString("RELATÓRIO DE NF-e", FontTitulo, Brushes.Black,
                 new RectangleF(x, y, larguraTotal, 28), sfCenter);
             y += 28;
@@ -143,7 +149,7 @@ namespace CONTROLE_DE_PEDIDOS
         {
             float cx = x;
             using var brush = new SolidBrush(Color.Black);
-            var sf = new StringFormat
+            using var sf = new StringFormat
             {
                 LineAlignment = StringAlignment.Center,
                 Trimming = StringTrimming.EllipsisCharacter,

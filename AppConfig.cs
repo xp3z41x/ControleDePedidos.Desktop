@@ -7,16 +7,20 @@ namespace CONTROLE_DE_PEDIDOS
         public string ServidorIP { get; set; } = "127.0.0.1";
         public string Porta { get; set; } = "5432";
         public string Usuario { get; set; } = "postgres";
-        public string Senha { get; set; } = "pg@atualDev";
+        public string Senha { get; set; } = "";
         public string BancoIntegra { get; set; } = "integrapgsql";
         public string BancoControle { get; set; } = "controlepedidos";
-        public int Filial { get; set; } = 5;
+        public int Filial { get; set; } = 1;
         public int OrcamentoMinimo { get; set; } = 0;
-        public int FilialFiscal { get; set; } = 0;
+        public int FilialFiscal { get; set; } = 1;
 
         // SOMENTE LEITURA - opcoes forcam read-only no nivel da sessao PostgreSQL
         public string ConnectionStringIntegra =>
             $"Host={ServidorIP};Port={Porta};Database={BancoIntegra};Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer;Options=-c default_transaction_read_only=on";
+
+        // ESCRITA EXCEPCIONAL - usar apenas no fluxo "Corrigir Observação".
+        public string ConnectionStringIntegraEscrita =>
+            $"Host={ServidorIP};Port={Porta};Database={BancoIntegra};Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer";
 
         public string ConnectionStringControle =>
             $"Host={ServidorIP};Port={Porta};Database={BancoControle};Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer";
@@ -45,7 +49,14 @@ namespace CONTROLE_DE_PEDIDOS
                 "[Fiscal]",
                 $"FilialFiscal={FilialFiscal}"
             };
-            File.WriteAllLines(ConfigPath, lines);
+            try
+            {
+                File.WriteAllLines(ConfigPath, lines);
+            }
+            catch (Exception ex)
+            {
+                throw new IOException($"Não foi possível gravar '{ConfigPath}': {ex.Message}", ex);
+            }
         }
 
         public static AppConfig Carregar()
@@ -54,7 +65,8 @@ namespace CONTROLE_DE_PEDIDOS
 
             if (!File.Exists(ConfigPath))
             {
-                config.Salvar();
+                try { config.Salvar(); }
+                catch { /* primeiro acesso sem disco/permissao - segue com padrao em memoria */ }
                 return config;
             }
 

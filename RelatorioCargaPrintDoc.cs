@@ -23,11 +23,16 @@ namespace CONTROLE_DE_PEDIDOS
             StringAlignment.Center, StringAlignment.Center, StringAlignment.Center, StringAlignment.Center
         ];
 
+        // A4: 210 x 297 mm = 827 x 1169 centésimos de polegada
+        private static readonly PaperSize A4 = new("A4", 827, 1169) { RawKind = (int)PaperKind.A4 };
+
         public RelatorioCargaPrintDoc(List<PedidoCarga> pedidos)
         {
             _pedidos = pedidos;
             DefaultPageSettings.Landscape = true;
             DefaultPageSettings.Margins = new Margins(40, 40, 40, 40);
+            DefaultPageSettings.PaperSize = A4;
+            OriginAtMargins = false;
         }
 
         protected override void OnBeginPrint(PrintEventArgs e)
@@ -41,6 +46,8 @@ namespace CONTROLE_DE_PEDIDOS
         {
             base.OnPrintPage(e);
             var g = e.Graphics!;
+            g.ResetTransform();
+            g.PageUnit = GraphicsUnit.Display; // 1/100 polegada — independe do monitor
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
 
             var area = e.MarginBounds;
@@ -58,7 +65,7 @@ namespace CONTROLE_DE_PEDIDOS
             const float paddingCelula = 4f;
 
             // === TÍTULO ===
-            var sfCenter = new StringFormat { Alignment = StringAlignment.Center };
+            using var sfCenter = new StringFormat { Alignment = StringAlignment.Center };
             g.DrawString("RELATÓRIO DE CARGA", FontTitulo, Brushes.Black,
                 new RectangleF(x, y, larguraTotal, 28), sfCenter);
             y += 28;
@@ -156,7 +163,7 @@ namespace CONTROLE_DE_PEDIDOS
                 g.DrawString($"TOTAL: {_pedidos.Count} pedido{(_pedidos.Count != 1 ? "s" : "")}",
                     FontRodape, Brushes.Black, x + 4, y);
 
-                var sfRight = new StringFormat { Alignment = StringAlignment.Far };
+                using var sfRight = new StringFormat { Alignment = StringAlignment.Far };
                 g.DrawString($"TOTAL VOLUMES: {totalVolumes}",
                     FontRodape, Brushes.Black,
                     new RectangleF(x, y, larguraTotal - 4, 20), sfRight);
@@ -170,7 +177,7 @@ namespace CONTROLE_DE_PEDIDOS
         {
             float cx = x;
             using var brush = new SolidBrush(Color.Black);
-            var sf = new StringFormat
+            using var sf = new StringFormat
             {
                 LineAlignment = StringAlignment.Center,
                 Trimming = StringTrimming.EllipsisCharacter,
