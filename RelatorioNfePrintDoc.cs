@@ -22,15 +22,13 @@ namespace CONTROLE_DE_PEDIDOS
             StringAlignment.Center, StringAlignment.Center, StringAlignment.Center
         ];
 
-        private static readonly PaperSize A4 = new("A4", 827, 1169) { RawKind = (int)PaperKind.A4 };
-
         public RelatorioNfePrintDoc(List<PedidoNfe> pedidos)
         {
             _pedidos = pedidos;
-            DefaultPageSettings.Landscape = true;
-            DefaultPageSettings.Margins = new Margins(40, 40, 40, 40);
-            DefaultPageSettings.PaperSize = A4;
             OriginAtMargins = false;
+            // Independência da impressora padrão do Windows: pré-seleciona uma
+            // impressora A4-capable e força A4/Landscape/Margins. Ver PrintingHelper.
+            PrintingHelper.AplicarConfigA4(this, landscape: true);
         }
 
         protected override void OnBeginPrint(PrintEventArgs e)

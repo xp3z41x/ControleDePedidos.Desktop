@@ -445,34 +445,152 @@ namespace CONTROLE_DE_PEDIDOS
                 return;
             }
 
-            var menu = new ContextMenuStrip { Renderer = new ThemeToolStripRenderer() };
-            menu.BackColor = Theme.BgCard;
-            menu.ForeColor = Theme.TextPrimary;
-            menu.Closed += (_, _) => menu.Dispose();
-            foreach (var rota in rotas)
+            using var dlg = new SelecionarRotasParaMarcarDialog(rotas);
+            if (dlg.ShowDialog(this) == DialogResult.OK && dlg.RotasSelecionadas.Count > 0)
             {
-                var item = new ToolStripMenuItem(rota) { ForeColor = Theme.TextPrimary };
-                item.Click += (_, _) => MarcarPorRota(rota);
-                menu.Items.Add(item);
+                MarcarPorRotas(dlg.RotasSelecionadas);
             }
-            menu.Show(btnMarcarRotas, new Point(0, btnMarcarRotas.Height));
         }
 
-        private void MarcarPorRota(string rota)
+        private void MarcarPorRotas(ISet<string> rotasSelecionadas)
         {
-            bool semRota = rota == SemRotaLabel;
+            // Comparador case-insensitive para os nomes de rota selecionados;
+            // "(Sem rota)" e o sentinel para linhas sem rota.
+            bool incluirSemRota = rotasSelecionadas.Contains(SemRotaLabel);
+            var rotasNormalizadas = new HashSet<string>(
+                rotasSelecionadas.Where(r => r != SemRotaLabel),
+                StringComparer.CurrentCultureIgnoreCase);
+
             foreach (DataGridViewRow row in dgvPedidos.Rows)
             {
                 if (row.DataBoundItem is not PedidoExclusao p) continue;
-                bool match = semRota
-                    ? string.IsNullOrWhiteSpace(p.Rota)
-                    : string.Equals(p.Rota?.Trim(), rota, StringComparison.CurrentCultureIgnoreCase);
+
+                bool semRota = string.IsNullOrWhiteSpace(p.Rota);
+                bool match = (semRota && incluirSemRota)
+                          || (!semRota && rotasNormalizadas.Contains(p.Rota.Trim()));
+
                 if (match)
                     row.Cells["colSelecionar"].Value = true;
             }
+
             dgvPedidos.EndEdit();
-            dgvPedidos.RefreshEdit();
             AtualizarContagemSelecionados();
+        }
+
+        // ============================================================
+        // Dialog auxiliar — picker multi-seleção de rotas
+        // ============================================================
+        private sealed class SelecionarRotasParaMarcarDialog : Form
+        {
+            private readonly CheckedListBox _lista;
+            private readonly Button _btnOk;
+            private readonly Button _btnCancelar;
+            private readonly Button _btnMarcarTodas;
+            private readonly Button _btnDesmarcarTodas;
+
+            public HashSet<string> RotasSelecionadas { get; } = new(StringComparer.Ordinal);
+
+            public SelecionarRotasParaMarcarDialog(IEnumerable<string> rotas)
+            {
+                Text = "Marcar pedidos por rota";
+                FormBorderStyle = FormBorderStyle.FixedDialog;
+                MaximizeBox = false;
+                MinimizeBox = false;
+                StartPosition = FormStartPosition.CenterParent;
+                BackColor = Theme.BgDark;
+                ForeColor = Theme.TextPrimary;
+                Font = Theme.FontRegular;
+                ClientSize = new Size(380, 420);
+                ShowInTaskbar = false;
+
+                var lblTitulo = new Label
+                {
+                    Text = "Selecione uma ou mais rotas:",
+                    Location = new Point(16, 16),
+                    AutoSize = true,
+                    ForeColor = Theme.TextPrimary,
+                    Font = Theme.FontRegular
+                };
+
+                _lista = new CheckedListBox
+                {
+                    Location = new Point(16, 44),
+                    Size = new Size(348, 280),
+                    BackColor = Theme.BgInput,
+                    ForeColor = Theme.TextPrimary,
+                    Font = Theme.FontRegular,
+                    BorderStyle = BorderStyle.FixedSingle,
+                    CheckOnClick = true,
+                    IntegralHeight = false
+                };
+                foreach (var r in rotas) _lista.Items.Add(r);
+
+                _btnMarcarTodas = new Button
+                {
+                    Text = "Marcar todas",
+                    Size = new Size(110, 28),
+                    Location = new Point(16, 332)
+                };
+                Theme.EstilizarBotao(_btnMarcarTodas);
+                _btnMarcarTodas.Click += (_, _) => DefinirTodas(true);
+
+                _btnDesmarcarTodas = new Button
+                {
+                    Text = "Desmarcar todas",
+                    Size = new Size(130, 28),
+                    Location = new Point(132, 332)
+                };
+                Theme.EstilizarBotao(_btnDesmarcarTodas);
+                _btnDesmarcarTodas.Click += (_, _) => DefinirTodas(false);
+
+                _btnCancelar = new Button
+                {
+                    Text = "Cancelar",
+                    Size = new Size(90, 32),
+                    Location = new Point(274, 376),
+                    DialogResult = DialogResult.Cancel
+                };
+                Theme.EstilizarBotao(_btnCancelar);
+
+                _btnOk = new Button
+                {
+                    Text = "Confirmar",
+                    Size = new Size(90, 32),
+                    Location = new Point(178, 376)
+                };
+                Theme.EstilizarBotao(_btnOk, primario: true);
+                _btnOk.Click += BtnOk_Click;
+
+                AcceptButton = _btnOk;
+                CancelButton = _btnCancelar;
+
+                Controls.AddRange([lblTitulo, _lista, _btnMarcarTodas, _btnDesmarcarTodas, _btnOk, _btnCancelar]);
+            }
+
+            private void DefinirTodas(bool marcado)
+            {
+                for (int i = 0; i < _lista.Items.Count; i++)
+                    _lista.SetItemChecked(i, marcado);
+            }
+
+            private void BtnOk_Click(object? sender, EventArgs e)
+            {
+                RotasSelecionadas.Clear();
+                foreach (var item in _lista.CheckedItems)
+                {
+                    if (item is string s) RotasSelecionadas.Add(s);
+                }
+
+                if (RotasSelecionadas.Count == 0)
+                {
+                    MessageBox.Show(this, "Selecione ao menos uma rota.", "Aviso",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                DialogResult = DialogResult.OK;
+                Close();
+            }
         }
 
         private List<PedidoExclusao> ObterSelecionados()

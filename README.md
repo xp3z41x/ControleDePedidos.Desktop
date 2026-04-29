@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-11.0.0-0969da?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-11.0.1-0969da?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/.NET-10-512BD4?style=flat-square&logo=dotnet" alt=".NET 10">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%2FServer-0078D6?style=flat-square&logo=windows" alt="Windows">
   <img src="https://img.shields.io/badge/database-PostgreSQL-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
@@ -61,7 +61,7 @@ O instalador é **self-contained** — não é necessário instalar o .NET runti
 ## Instalação
 
 1. Baixe a versão mais recente em **[Releases](https://github.com/xp3z41x/ControleDePedidos.Desktop/releases/latest)**.
-2. Execute `Setup-ControleDePedidos-11.0.0.exe`.
+2. Execute `Setup-ControleDePedidos-11.0.1.exe`.
 3. Aceite o prompt UAC (administrador necessário para instalar em `Program Files`).
 4. Siga o wizard. Instalação default em `C:\Program Files\Controle de Pedidos\`.
 5. No final, deixe marcada a opção **"Executar Controle de Pedidos"** para que a primeira configuração herde a elevação do instalador.
@@ -135,7 +135,7 @@ Saída: `bin\Release\net10.0-windows\win-x64\publish\CONTROLE DE PEDIDOS.exe` (~
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\installer.iss
 ```
 
-Saída: `installer\output\Setup-ControleDePedidos-11.0.0.exe`.
+Saída: `installer\output\Setup-ControleDePedidos-11.0.1.exe`.
 
 Para subir uma nova versão:
 

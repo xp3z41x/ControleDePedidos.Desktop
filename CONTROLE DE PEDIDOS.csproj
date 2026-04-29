@@ -11,9 +11,9 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
 
     <!-- Identidade do assembly (aparece em "Detalhes" do EXE no Windows) -->
-    <Version>11.0.0.0</Version>
-    <AssemblyVersion>11.0.0.0</AssemblyVersion>
-    <FileVersion>11.0.0.0</FileVersion>
+    <Version>11.0.1.0</Version>
+    <AssemblyVersion>11.0.1.0</AssemblyVersion>
+    <FileVersion>11.0.1.0</FileVersion>
     <Company>Bernardo Graunke</Company>
     <Product>Controle De Pedidos</Product>
     <AssemblyTitle>Controle De Pedidos</AssemblyTitle>

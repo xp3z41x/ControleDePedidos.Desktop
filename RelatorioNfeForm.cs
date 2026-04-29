@@ -479,17 +479,35 @@ namespace CONTROLE_DE_PEDIDOS
                 Document = doc,
                 UseEXDialog = true
             };
-            dialog.PrinterSettings.DefaultPageSettings.Landscape = true;
+            // Camada 1 (PrintingHelper.AplicarConfigA4) já pré-selecionou impressora A4-capable
+            // no construtor da PrintDoc. PrintDialog abrirá com ela, não com a térmica padrão.
 
             if (dialog.ShowDialog(this) == DialogResult.OK)
             {
+                // Camada 2: usuário pode ter trocado de impressora — re-forçar A4/Landscape/Margins.
+                // PrintDialog reescreve DefaultPageSettings baseado na impressora final escolhida.
+                doc.DefaultPageSettings.PaperSize = PrintingHelper.CriarPaperSizeA4();
+                doc.DefaultPageSettings.Landscape = true;
+                doc.DefaultPageSettings.Margins = new Margins(40, 40, 40, 40);
+
+                if (!PrintingHelper.ImpressoraSuportaA4(doc))
+                {
+                    var continuar = MessageBox.Show(this,
+                        $"A impressora '{doc.PrinterSettings.PrinterName}' não declara suporte a papel A4.\n" +
+                        "O documento pode ser impresso de forma incorreta ou rejeitado pelo driver.\n\n" +
+                        "Imprimir mesmo assim?",
+                        "Aviso", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    if (continuar != DialogResult.Yes) return;
+                }
+
+                PrintingHelper.LogarEstado(doc, "Imprimir Relatório de NF-e");
                 try
                 {
-                    doc.DefaultPageSettings.Landscape = true;
                     doc.Print();
                 }
                 catch (Exception ex)
                 {
+                    Logger.Error("Erro ao imprimir Relatório de NF-e", ex);
                     MessageBox.Show(this, $"Erro ao imprimir: {ex.Message}", "Erro",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
@@ -510,6 +528,7 @@ namespace CONTROLE_DE_PEDIDOS
                 string.Compare(a.Cliente, b.Cliente, StringComparison.OrdinalIgnoreCase));
 
             var doc = new RelatorioNfePrintDoc(selecionados);
+            PrintingHelper.LogarEstado(doc, "Visualizar Relatório de NF-e");
             using var preview = new PrintPreviewDialog
             {
                 Document = doc,
