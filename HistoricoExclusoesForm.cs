@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 
 namespace CONTROLE_DE_PEDIDOS
 {
@@ -23,6 +23,7 @@ namespace CONTROLE_DE_PEDIDOS
         public HistoricoExclusoesForm()
         {
             InitializeUI();
+            Load += (_, _) => Theme.LimitarAoWorkingArea(this);
             _ = CarregarAsync();
         }
 
@@ -197,77 +198,88 @@ namespace CONTROLE_DE_PEDIDOS
                     Name = "colData",
                     HeaderText = "DATA",
                     DataPropertyName = "DataExclusaoTexto",
-                    Width = 120
+                    Width = 120,
+                    MinimumWidth = 90
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colTipo",
                     HeaderText = "TIPO",
                     DataPropertyName = "TipoExclusao",
-                    Width = 70
+                    Width = 70,
+                    MinimumWidth = 55
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colOrcamento",
                     HeaderText = "ORÇAMENTO",
                     DataPropertyName = "Orcamento",
-                    Width = 95
+                    Width = 95,
+                    MinimumWidth = 75
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colStatus",
                     HeaderText = "STATUS",
                     DataPropertyName = "Status",
-                    Width = 130
+                    Width = 130,
+                    MinimumWidth = 90
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colCliente",
                     HeaderText = "CLIENTE",
                     DataPropertyName = "Cliente",
-                    AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
+                    AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
+                    MinimumWidth = 140
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colNomeFantasia",
                     HeaderText = "FANTASIA",
                     DataPropertyName = "NomeFantasia",
-                    Width = 200
+                    Width = 200,
+                    MinimumWidth = 110
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colRota",
                     HeaderText = "ROTA",
                     DataPropertyName = "Rota",
-                    Width = 100
+                    Width = 100,
+                    MinimumWidth = 70
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colVendedor",
                     HeaderText = "VENDEDOR",
                     DataPropertyName = "Vendedor",
-                    Width = 120
+                    Width = 120,
+                    MinimumWidth = 85
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colPedidoVenda",
                     HeaderText = "PED. VENDA",
                     DataPropertyName = "PedidoVendaTexto",
-                    Width = 95
+                    Width = 95,
+                    MinimumWidth = 75
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colNotaFiscal",
                     HeaderText = "NFE",
                     DataPropertyName = "NotaFiscal",
-                    Width = 90
+                    Width = 90,
+                    MinimumWidth = 70
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colUsuario",
                     HeaderText = "USUÁRIO",
                     DataPropertyName = "UsuarioWindows",
-                    Width = 120
+                    Width = 120,
+                    MinimumWidth = 85
                 }
             );
 

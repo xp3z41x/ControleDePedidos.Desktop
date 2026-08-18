@@ -32,16 +32,48 @@ namespace CONTROLE_DE_PEDIDOS
                     Directory.CreateDirectory(LogDir);
                     RotacionarSeNecessario();
 
-                    var linha = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{nivel}] {mensagem}";
+                    // Identifica o processo: no RDS há 10+ instâncias gravando no MESMO
+                    // arquivo, e sem isso é impossível saber de qual sessão veio a linha.
+                    var linha = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{nivel}] [{Environment.ProcessId}] {mensagem}";
                     if (ex != null)
                         linha += $"{Environment.NewLine}  -> {ex.GetType().Name}: {ex.Message}{Environment.NewLine}  {ex.StackTrace}";
 
-                    File.AppendAllText(LogPath, linha + Environment.NewLine);
+                    EscreverComRetry(linha + Environment.NewLine);
                 }
             }
             catch
             {
                 // Nunca derrubar o app por falha de log.
+            }
+        }
+
+        /// <summary>
+        /// Grava permitindo que outros processos tenham o arquivo aberto. O lock acima é
+        /// só intra-processo: com várias instâncias na mesma máquina (RDS), o
+        /// File.AppendAllText original falhava por arquivo em uso e a linha era perdida
+        /// em silêncio. Aqui compartilhamos o handle e ainda tentamos de novo.
+        /// </summary>
+        private static void EscreverComRetry(string texto)
+        {
+            const int tentativas = 8;
+            for (int i = 0; i < tentativas; i++)
+            {
+                try
+                {
+                    using var fs = new FileStream(LogPath, FileMode.Append, FileAccess.Write,
+                                                  FileShare.ReadWrite | FileShare.Delete);
+                    using var sw = new StreamWriter(fs);
+                    sw.Write(texto);
+                    return;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Windows lança as duas em disputa de arquivo entre processos.
+                    if (i == tentativas - 1) return;   // desiste em silêncio: log nunca derruba o app
+                    // Jitter no backoff: sem ele as instâncias que colidiram tentam de
+                    // novo no mesmo instante e colidem outra vez.
+                    Thread.Sleep(8 + i * 12 + Random.Shared.Next(0, 20));
+                }
             }
         }
 

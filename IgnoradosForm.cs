@@ -14,6 +14,7 @@ namespace CONTROLE_DE_PEDIDOS
         public IgnoradosForm()
         {
             InitializeUI();
+            Load += (_, _) => Theme.LimitarAoWorkingArea(this);
             _ = CarregarAsync();
         }
 

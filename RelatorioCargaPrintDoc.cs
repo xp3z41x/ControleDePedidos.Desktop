@@ -7,6 +7,8 @@ namespace CONTROLE_DE_PEDIDOS
         private readonly List<PedidoCarga> _pedidos;
         private int _indicePagina;
         private int _numSequencial;
+        private bool _preview;
+        private PrintingHelper.GeometriaPagina? _geo;
 
         private static readonly Font FontTitulo = new("Segoe UI Semibold", 14f);
         private static readonly Font FontData = new("Segoe UI", 9f);
@@ -26,6 +28,9 @@ namespace CONTROLE_DE_PEDIDOS
         public RelatorioCargaPrintDoc(List<PedidoCarga> pedidos)
         {
             _pedidos = pedidos;
+            // NÃO trocar para true: o alinhamento com o papel é feito manualmente em
+            // GeometriaPagina.PrepararPagina (cujo ResetTransform anularia a compensação
+            // do controller, além de deslocar o preview).
             OriginAtMargins = false;
             // Independência da impressora padrão do Windows: pré-seleciona uma
             // impressora A4-capable e força A4/Landscape/Margins. Ver PrintingHelper.
@@ -37,17 +42,22 @@ namespace CONTROLE_DE_PEDIDOS
             base.OnBeginPrint(e);
             _indicePagina = 0;
             _numSequencial = 0;
+            _preview = e.PrintAction == PrintAction.PrintToPreview;
+            // Uma medição por job — ver PrintingHelper.GeometriaPagina.
+            _geo = PrintingHelper.GeometriaPagina.Medir(DefaultPageSettings);
         }
 
         protected override void OnPrintPage(PrintPageEventArgs e)
         {
             base.OnPrintPage(e);
             var g = e.Graphics!;
-            g.ResetTransform();
-            g.PageUnit = GraphicsUnit.Display; // 1/100 polegada — independe do monitor
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+            _geo ??= PrintingHelper.GeometriaPagina.Medir(e.PageSettings);
+            // Alinha a origem ao canto do PAPEL na impressão real (o preview já está
+            // nesse referencial) e recorta a área ao que a impressora consegue marcar.
+            var area = _geo.PrepararPagina(e, _preview);
+            if (_indicePagina == 0)
+                PrintingHelper.LogarPagina(e, "Carga", area, _geo, _preview);
 
-            var area = e.MarginBounds;
             float x = area.Left;
             float y = area.Top;
             float larguraTotal = area.Width;
@@ -91,12 +101,16 @@ namespace CONTROLE_DE_PEDIDOS
 
             // === LINHAS DE DADOS ===
             bool ultimaPagina = false;
+            int itensNestaPagina = 0;
             while (_indicePagina < _pedidos.Count)
             {
-                // Verificar se cabe mais uma linha
-                if (y + alturaLinha > limiteY)
+                // Verificar se cabe mais uma linha. Garantia de progresso: ao menos uma
+                // linha por página, senão HasMorePages ficaria true para sempre (job
+                // infinito de folhas em branco) se a área útil ficar mínima.
+                if (y + alturaLinha > limiteY && itensNestaPagina > 0)
                     break;
 
+                itensNestaPagina++;
                 var p = _pedidos[_indicePagina];
                 _numSequencial++;
                 _indicePagina++;

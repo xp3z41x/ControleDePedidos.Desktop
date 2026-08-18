@@ -26,6 +26,152 @@ namespace CONTROLE_DE_PEDIDOS
             new("A4", 827, 1169) { RawKind = (int)PaperKind.A4 };
 
         /// <summary>
+        /// Geometria FÍSICA da página em centésimos de polegada, no sistema de
+        /// coordenadas do PAPEL (origem = canto físico da folha) — o MESMO referencial
+        /// de <see cref="PrintPageEventArgs.MarginBounds"/>.
+        ///
+        /// POR QUE ISTO EXISTE
+        /// Com OriginAtMargins=false o WinForms não aplica transform nenhum, e os dois
+        /// controllers entregam origens DIFERENTES:
+        ///   - impressão real (StandardPrintController): o Graphics vem de um DC de
+        ///     impressora, cuja origem é o canto da ÁREA IMPRIMÍVEL (o GDI já desconta
+        ///     a faixa física que a impressora não alcança);
+        ///   - preview (PreviewPrintController): o Graphics vem de um metafile do
+        ///     tamanho de PageBounds, ou seja origem = canto do PAPEL.
+        /// Como e.MarginBounds é SEMPRE calculado a partir do canto do papel, na
+        /// impressão real todo o desenho saía deslocado ~4mm para a direita e para
+        /// baixo, jogando a última coluna para fora da área imprimível — o corte que
+        /// não aparecia no preview.
+        /// </summary>
+        public sealed class GeometriaPagina
+        {
+            /// <summary>Retângulo fisicamente imprimível, em coordenadas do PAPEL (1/100").</summary>
+            public RectangleF Imprimivel { get; private init; }
+
+            /// <summary>false = o driver não informou nada coerente e assumimos a folha
+            /// inteira (mesmo comportamento de antes da correção — degradação segura).</summary>
+            public bool Confiavel { get; private init; }
+
+            private string _bruto = "";
+
+            /// <summary>
+            /// Mede a geometria da impressora atual. Nunca lança: qualquer falha
+            /// (impressora offline/removida) cai para "folha inteira".
+            /// Chamar UMA VEZ POR JOB (em OnBeginPrint): cada leitura de
+            /// PrintableArea/HardMargin cria e destrói um DC de impressora, o que
+            /// custa dezenas de ms em impressora de rede.
+            /// </summary>
+            public static GeometriaPagina Medir(PageSettings ps)
+            {
+                Rectangle papel;
+                try { papel = ps.Bounds; }   // Bounds JÁ respeita Landscape (troca W/H)
+                catch { papel = new Rectangle(0, 0, 827, 1169); }
+
+                GeometriaPagina FolhaInteira(string motivo) => new()
+                {
+                    Imprimivel = new RectangleF(0, 0, papel.Width, papel.Height),
+                    Confiavel = false,
+                    _bruto = $"papel={papel.Width}x{papel.Height} land={ps.Landscape} [{motivo}]"
+                };
+
+                try
+                {
+                    // HardMarginX/Y são orientação-aware, mas o getter do .NET divide em
+                    // aritmética INTEIRA (reporta 16 onde o físico é 16,67) e não informa
+                    // a margem inferior/direita. Servem só para DESEMPATAR a orientação.
+                    float hx = ps.HardMarginX;
+                    float hy = ps.HardMarginY;
+
+                    // PrintableArea traz os offsets em float E a extensão imprimível real
+                    // — é de lá que sai a margem física inferior/direita, que pode ser
+                    // MAIOR que a superior/esquerda (típico de jato de tinta). Por isso
+                    // não se pode simplesmente encolher PageBounds de forma simétrica.
+                    //
+                    // ARMADILHA: em paisagem alguns drivers trocam X<->Y e W<->H sobre um
+                    // DC que o GDI já rotacionou (troca dupla). Testamos as duas variantes
+                    // e usamos a coerente — assim o código continua correto se a troca
+                    // deixar de acontecer numa versão futura do .NET.
+                    var pa = ps.PrintableArea;
+                    var trocado = new RectangleF(pa.Y, pa.X, pa.Height, pa.Width);
+                    string bruto = $"papel={papel.Width}x{papel.Height} land={ps.Landscape} " +
+                                   $"hard=({hx};{hy}) printableArea={pa}";
+
+                    RectangleF imp;
+                    if (Coerente(pa, hx, hy, papel)) imp = pa;
+                    else if (Coerente(trocado, hx, hy, papel)) imp = trocado;
+                    else
+                    {
+                        Logger.Warn($"Geometria da página incoerente; assumindo folha inteira. {bruto}");
+                        return FolhaInteira(bruto);
+                    }
+
+                    return new GeometriaPagina { Imprimivel = imp, Confiavel = true, _bruto = bruto };
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"Falha ao medir geometria da página " +
+                                $"({ex.GetType().Name}: {ex.Message}); assumindo folha inteira.");
+                    return FolhaInteira(ex.GetType().Name);
+                }
+
+                // Aceita só valores fisicamente plausíveis. Tolerância de 1,5 centésimos
+                // porque HardMargin vem truncado (erro sempre < 1).
+                static bool Coerente(RectangleF r, float hx, float hy, Rectangle papel) =>
+                    float.IsFinite(r.X) && float.IsFinite(r.Y) &&
+                    float.IsFinite(r.Width) && float.IsFinite(r.Height) &&
+                    r.X >= 0f && r.Y >= 0f &&
+                    r.Width > papel.Width * 0.5f && r.Height > papel.Height * 0.5f &&
+                    r.Right <= papel.Width + 1f && r.Bottom <= papel.Height + 1f &&
+                    Math.Abs(r.X - hx) <= 1.5f && Math.Abs(r.Y - hy) <= 1.5f;
+            }
+
+            /// <summary>
+            /// Prepara o Graphics da página e devolve a área de desenho em coordenadas
+            /// do PAPEL (1/100"), IDÊNTICA no preview e na impressão real. Chamar como
+            /// primeira coisa do OnPrintPage.
+            ///
+            /// ATENÇÃO — invariante frágil:
+            ///   - o TRANSLATE depende do modo (só na impressão real): é ele que faz o
+            ///     papel coincidir com o preview;
+            ///   - o CLAMP nunca depende do modo — ele define a largura das colunas e
+            ///     quantos itens cabem por página. Movê-lo para dentro do "if (real)"
+            ///     faria preview e papel paginarem diferente.
+            /// </summary>
+            public RectangleF PrepararPagina(PrintPageEventArgs e, bool preview)
+            {
+                var g = e.Graphics!;
+
+                // ResetTransform antes do translate: garante identidade como base e evita
+                // compensação dupla caso algum controller passe a aplicar transform.
+                // (É este ResetTransform que torna OriginAtMargins inócuo — trocá-lo para
+                // true não resolveria nada e ainda deslocaria o preview.)
+                g.ResetTransform();
+
+                // 1/100 de polegada. DEFINIR ANTES do translate: o offset é interpretado
+                // na unidade de página vigente.
+                g.PageUnit = GraphicsUnit.Display;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+
+                if (!preview)
+                    g.TranslateTransform(-Imprimivel.X, -Imprimivel.Y);
+
+                var area = RectangleF.Intersect(e.MarginBounds, Imprimivel);
+
+                // Nunca devolver área degenerada: sem espaço para uma linha, o laço de
+                // itens sairia sem consumir nada e HasMorePages ficaria true para sempre.
+                if (area.Width < 50f || area.Height < 50f)
+                {
+                    Logger.Warn($"Área útil degenerada ({area}); usando MarginBounds. {this}");
+                    area = e.MarginBounds;
+                }
+                return area;
+            }
+
+            public override string ToString() =>
+                $"imprimivel={Imprimivel} confiavel={Confiavel} [{_bruto}]";
+        }
+
+        /// <summary>
         /// Aplica configurações A4 (paper size, landscape, margins) ao documento
         /// E seleciona a primeira impressora instalada que suporte A4, evitando
         /// térmicas/etiquetadoras quando possível. Idempotente — pode ser chamado
@@ -98,6 +244,75 @@ namespace CONTROLE_DE_PEDIDOS
         }
 
         /// <summary>
+        /// Preview maximizado com o botão nativo de impressão substituído por
+        /// "Imprimir..." que abre o PrintDialog. O botão nativo imprime DIRETO na
+        /// impressora pré-selecionada, sem escolha nem feedback — se a fila dela
+        /// estiver travada, "nada acontece" (histórico: bug da v11.1).
+        ///
+        /// <paramref name="reaplicarPageSettings"/> roda após o OK do PrintDialog,
+        /// que reescreve DefaultPageSettings — o callback DEVE re-forçar PaperSize A4,
+        /// Landscape e Margins do relatório em questão.
+        /// </summary>
+        public static void ExibirPreviewComImpressao(Form owner, PrintDocument doc,
+            string contextoLog, Action reaplicarPageSettings)
+        {
+            using var preview = new PrintPreviewDialog
+            {
+                Document = doc,
+                WindowState = FormWindowState.Maximized
+            };
+
+            if (preview.Controls.OfType<ToolStrip>().FirstOrDefault() is { } barraPreview
+                && barraPreview.Items.Count > 0)
+            {
+                var btnNativo = barraPreview.Items[0];
+                btnNativo.Visible = false;
+
+                var btnImprimirPreview = new ToolStripButton("Imprimir...")
+                {
+                    DisplayStyle = ToolStripItemDisplayStyle.ImageAndText,
+                    Image = btnNativo.Image
+                };
+                btnImprimirPreview.Click += (_, _) =>
+                {
+                    using var dlgImpressao = new PrintDialog
+                    {
+                        Document = doc,
+                        UseEXDialog = true
+                    };
+                    if (dlgImpressao.ShowDialog(preview) != DialogResult.OK) return;
+
+                    reaplicarPageSettings();
+
+                    if (!ImpressoraSuportaA4(doc))
+                    {
+                        var continuar = MessageBox.Show(preview,
+                            $"A impressora '{doc.PrinterSettings.PrinterName}' não declara suporte a papel A4.\n" +
+                            "O documento pode ser impresso de forma incorreta ou rejeitado pelo driver.\n\n" +
+                            "Imprimir mesmo assim?",
+                            "Aviso", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                        if (continuar != DialogResult.Yes) return;
+                    }
+
+                    LogarEstado(doc, $"{contextoLog} (confirmado)");
+                    try
+                    {
+                        doc.Print();
+                    }
+                    catch (Exception exImpressao)
+                    {
+                        Logger.Error($"Erro ao imprimir ({contextoLog})", exImpressao);
+                        MessageBox.Show(preview, $"Erro ao imprimir: {exImpressao.Message}", "Erro",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                };
+                barraPreview.Items.Insert(0, btnImprimirPreview);
+            }
+
+            preview.ShowDialog(owner);
+        }
+
+        /// <summary>
         /// Loga estado de impressão para diagnóstico (printer name, paper size,
         /// margens, orientação). Chamar antes de Print() ou Preview.
         /// </summary>
@@ -105,17 +320,105 @@ namespace CONTROLE_DE_PEDIDOS
         {
             try
             {
-                var ps = doc.DefaultPageSettings.PaperSize;
-                var m = doc.DefaultPageSettings.Margins;
+                var pg = doc.DefaultPageSettings;
+                var ps = pg.PaperSize;
+                var m = pg.Margins;
+                // ATENÇÃO: PaperSize aqui é o objeto que NÓS atribuímos — log parcialmente
+                // circular. A prova do papel realmente negociado com o driver é
+                // e.PageBounds dentro do OnPrintPage (ver LogarPagina).
+                var geo = GeometriaPagina.Medir(pg);
                 Logger.Info(
                     $"{contexto} | Printer='{doc.PrinterSettings.PrinterName}' | " +
-                    $"PaperKind={ps.Kind} ({ps.Width}x{ps.Height}) | " +
-                    $"Landscape={doc.DefaultPageSettings.Landscape} | " +
-                    $"Margins=L{m.Left},R{m.Right},T{m.Top},B{m.Bottom}");
+                    $"PaperKind={ps.Kind} RawKind={ps.RawKind} ({ps.Width}x{ps.Height}) | " +
+                    $"Landscape={pg.Landscape} | " +
+                    $"Margins=L{m.Left},R{m.Right},T{m.Top},B{m.Bottom} | " +
+                    $"Controller={doc.PrintController?.GetType().Name} " +
+                    $"(IsPreview={doc.PrintController?.IsPreview}) | {geo}");
             }
             catch (Exception ex)
             {
                 Logger.Warn($"Falha ao logar estado de impressão: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Diagnóstico DENTRO da página (chamar só na página 1, nos dois modos).
+        /// Diferente de LogarEstado, aqui e.PageBounds vem do papel realmente negociado
+        /// com o driver, e VisibleClipBounds é a prova empírica da origem: no preview
+        /// vale a folha inteira, na impressão real vale a área imprimível.
+        /// DENTRO_DA_AREA_IMPRIMIVEL=False é a assinatura exata do corte.
+        /// </summary>
+        public static void LogarPagina(PrintPageEventArgs e, string contexto,
+                                       RectangleF area, GeometriaPagina geo, bool preview)
+        {
+            try
+            {
+                var g = e.Graphics!;
+                var vcb = g.VisibleClipBounds;
+                using var t = g.Transform;
+                // No modo real a referência é a superfície do device (área imprimível);
+                // no preview o metafile reporta o clip da impressora mas grava além dele,
+                // então a referência correta é a folha inteira.
+                var limite = preview ? (RectangleF)e.PageBounds : vcb;
+                bool dentro = area.Left >= limite.Left - 0.5f && area.Top >= limite.Top - 0.5f
+                           && area.Right <= limite.Right + 0.5f && area.Bottom <= limite.Bottom + 0.5f;
+                Logger.Info(
+                    $"{contexto} | modo={(preview ? "PREVIEW" : "REAL")} | " +
+                    $"Printer='{e.PageSettings.PrinterSettings.PrinterName}' | " +
+                    $"PageBounds={e.PageBounds.Width}x{e.PageBounds.Height} | " +
+                    $"MarginBounds={e.MarginBounds} | area={area} | " +
+                    $"{geo} | VisibleClip={vcb} | transform=({t.OffsetX};{t.OffsetY}) | " +
+                    $"dpi={g.DpiX}x{g.DpiY} | DENTRO_DA_AREA_IMPRIMIVEL={dentro}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Falha ao logar página: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Primitivas de tabela compartilhadas pelos relatórios impressos
+    /// (Separação de Mercadorias e Cópia de Pedido): medição de altura de linha
+    /// com quebra por coluna e desenho de uma linha de células.
+    /// Extraídas de RelatorioSeparacaoPrintDoc para os dois relatórios quebrarem
+    /// texto de forma idêntica.
+    /// </summary>
+    internal static class RelatorioTabela
+    {
+        /// <summary>Altura necessária para exibir todos os valores por completo (com wrap).</summary>
+        internal static float MedirAlturaLinha(Graphics g, float[] colW, string[] valores,
+            Font font, float padding, float alturaMinima)
+        {
+            float altura = alturaMinima;
+            for (int i = 0; i < valores.Length && i < colW.Length; i++)
+            {
+                if (string.IsNullOrEmpty(valores[i])) continue;
+                float larguraUtil = colW[i] - padding * 2;
+                float h = g.MeasureString(valores[i], font, (int)larguraUtil).Height + 5f;
+                if (h > altura) altura = h;
+            }
+            return altura;
+        }
+
+        internal static void DrawRow(Graphics g, float[] colW, string[] valores, Font font,
+            float x, float y, float altura, float padding, StringAlignment[] aligns, bool quebrarLinha)
+        {
+            float cx = x;
+            using var brush = new SolidBrush(Color.Black);
+            using var sf = new StringFormat
+            {
+                LineAlignment = StringAlignment.Center,
+                Trimming = quebrarLinha ? StringTrimming.None : StringTrimming.EllipsisCharacter,
+                FormatFlags = quebrarLinha ? 0 : StringFormatFlags.NoWrap
+            };
+
+            for (int i = 0; i < valores.Length && i < colW.Length; i++)
+            {
+                sf.Alignment = aligns[i];
+                var rect = new RectangleF(cx + padding, y, colW[i] - padding * 2, altura);
+                g.DrawString(valores[i], font, brush, rect, sf);
+                cx += colW[i];
             }
         }
     }

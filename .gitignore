@@ -17,11 +17,12 @@ packages/
 ## Publish profiles (user/machine-specific, regenerated pelo VS)
 Properties/PublishProfiles/
 
-## Claude Code
-.claude/
-
 ## Signing keys
 *.pfx
+
+## Logomarca original em alta resolucao (8000x5000, 153 MB) - NUNCA versionar;
+## a versao reduzida usada pelo app esta versionada em Resources/
+LOGO DISTRIBUIDORA.png
 
 ## OS
 $RECYCLE.BIN/

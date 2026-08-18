@@ -18,6 +18,7 @@ namespace CONTROLE_DE_PEDIDOS
         public ExclusaoMassaForm()
         {
             InitializeUI();
+            Load += (_, _) => Theme.LimitarAoWorkingArea(this);
             _ = CarregarAsync();
         }
 

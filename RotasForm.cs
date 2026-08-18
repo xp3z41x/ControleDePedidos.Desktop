@@ -15,6 +15,7 @@ namespace CONTROLE_DE_PEDIDOS
         public RotasForm()
         {
             InitializeUI();
+            Load += (_, _) => Theme.LimitarAoWorkingArea(this);
             _ = CarregarRotasAsync();
         }
 

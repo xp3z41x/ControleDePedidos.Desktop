@@ -18,6 +18,7 @@ namespace CONTROLE_DE_PEDIDOS
         public RelatorioCargaForm()
         {
             InitializeUI();
+            Load += (_, _) => Theme.LimitarAoWorkingArea(this);
             _ = CarregarAsync();
         }
 

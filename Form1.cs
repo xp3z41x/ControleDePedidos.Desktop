@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 
 namespace CONTROLE_DE_PEDIDOS
 {
@@ -9,6 +9,14 @@ namespace CONTROLE_DE_PEDIDOS
         private HashSet<int> _ignorados = [];
         private HashSet<int> _aprovados = [];
         private bool _recarregando;
+        /// <summary>Suprime DgvSelectionChanged enquanto o código mexe na seleção (refresh).</summary>
+        private bool _suprimirSelectionChanged;
+        /// <summary>Assinatura do último conjunto de orçamentos pendentes já refletido na tela.</summary>
+        private string _assinaturaOrcamentos = "";
+        /// <summary>Assinatura do último conjunto de pedidos controlados já refletido na tela.</summary>
+        private string _assinaturaPedidos = "";
+        /// <summary>Conjuntos já publicados nos dropdowns de filtro (evita recriar itens à toa).</summary>
+        private string _assinaturaDropdowns = "";
 
         // Master list e estado dos filtros (persistidos via FilterStore)
         private List<PedidoControlado> _pedidosTodos = [];
@@ -24,9 +32,17 @@ namespace CONTROLE_DE_PEDIDOS
             InitializeComponent();
             _db = DatabaseService.Instancia;
             _db.StatusAlterado += Db_StatusAlterado;
+            _db.MudancaNotificada += Db_MudancaNotificada;
             RestaurarFiltrosDaPersistencia();
             WireDropDownMacros();
             AtualizarIndicadoresVisuais();
+
+            // Cadência adaptativa: reprogramar quando o foco ou o estado da janela muda
+            Activated += (_, _) => AgendarProximoRefresh();
+            Deactivate += (_, _) => AgendarProximoRefresh();
+            Resize += (_, _) => AgendarProximoRefresh();
+            // SessionSwitch é estático: precisa ser desanexado no fechamento (ver OnFormClosed)
+            Microsoft.Win32.SystemEvents.SessionSwitch += SessionSwitchHandler;
         }
 
         private void RestaurarFiltrosDaPersistencia()
@@ -44,6 +60,77 @@ namespace CONTROLE_DE_PEDIDOS
         {
             base.OnShown(e);
             BeginInvoke(() => _db.Iniciar(15000));
+        }
+
+        // ==================================================================
+        // CADÊNCIA DO AUTO-REFRESH
+        // Base curta (15s) para a tela ficar quase ao vivo, mas com três freios que
+        // mantêm a carga baixa com 10+ sessões no mesmo RDS:
+        //   - jitter: as instâncias sobem juntas no logon em massa e os timers alinham,
+        //     criando picos (medido: 257ms de latência sincronizado × 4ms escalonado);
+        //   - backoff por foco/minimização: no RDS há muitas sessões abertas e poucas
+        //     em uso ativo;
+        //   - pausa total com a sessão RDP desconectada ou bloqueada — nesse caso o
+        //     Windows NÃO dispara Deactivate, então é preciso ouvir SessionSwitch.
+        // O custo real do ciclo é o rebind do grid (~45ms), não a query (~1,7ms); por
+        // isso o dirty check em memória é o que de fato protege o servidor.
+        // ==================================================================
+        private const int RefreshBaseMs = 15000;      // janela em foco
+        private const int RefreshSemFocoMs = 30000;   // aberta, sem foco
+        private const int RefreshMinimizadoMs = 120000;
+        private bool _sessaoAtiva = true;             // false = RDP desconectado ou bloqueado
+        private bool _mudancaPendente;                // notificação recebida aguardando coalescing
+
+        private int IntervaloRefreshAlvo()
+        {
+            if (WindowState == FormWindowState.Minimized) return RefreshMinimizadoMs;
+            return Form.ActiveForm == this || ContainsFocus ? RefreshBaseMs : RefreshSemFocoMs;
+        }
+
+        /// <summary>Reprograma o timer com jitter, respeitando foco e estado da sessão.</summary>
+        private void AgendarProximoRefresh()
+        {
+            if (!_dadosIniciaisCarregados) return;
+
+            if (!_sessaoAtiva)
+            {
+                timerAutoRefresh.Stop();
+                return;
+            }
+
+            int alvo = IntervaloRefreshAlvo();
+            // Jitter de até 25%: dessincroniza as instâncias que subiram juntas.
+            timerAutoRefresh.Interval = alvo + Random.Shared.Next(0, alvo / 4);
+            timerAutoRefresh.Start();
+        }
+
+        private void SessionSwitchHandler(object sender, Microsoft.Win32.SessionSwitchEventArgs e)
+        {
+            void Aplicar()
+            {
+                switch (e.Reason)
+                {
+                    case Microsoft.Win32.SessionSwitchReason.RemoteDisconnect:
+                    case Microsoft.Win32.SessionSwitchReason.SessionLock:
+                    case Microsoft.Win32.SessionSwitchReason.ConsoleDisconnect:
+                        _sessaoAtiva = false;
+                        timerAutoRefresh.Stop();
+                        Logger.Info($"Sessão inativa ({e.Reason}) — auto-refresh pausado.");
+                        break;
+
+                    case Microsoft.Win32.SessionSwitchReason.RemoteConnect:
+                    case Microsoft.Win32.SessionSwitchReason.SessionUnlock:
+                    case Microsoft.Win32.SessionSwitchReason.ConsoleConnect:
+                        _sessaoAtiva = true;
+                        Logger.Info($"Sessão reativada ({e.Reason}) — recarregando.");
+                        AgendarProximoRefresh();
+                        _ = RecarregarDadosAsync();   // pega tudo que mudou durante a ausência
+                        break;
+                }
+            }
+
+            if (InvokeRequired) BeginInvoke(Aplicar);
+            else Aplicar();
         }
 
         private async Task CarregarIgnoradosAsync()
@@ -123,9 +210,18 @@ namespace CONTROLE_DE_PEDIDOS
 
                 var dados = lista ?? [];
 
+                // Dirty check (mesma razão do grid de pedidos): não pagar rebind quando
+                // o conteúdo é idêntico ao que já está na tela.
+                string assinatura = string.Join("\n", dados.Select(o =>
+                    $"{o.Orcamento}\u001F{o.Nome}\u001F{o.NomeFantasia}"));
+                if (assinatura == _assinaturaOrcamentos && dgvOrcamentos.DataSource != null)
+                    return;
+                _assinaturaOrcamentos = assinatura;
+
                 // Suprimir repaints intermediários durante a atualização
                 dgvOrcamentos.SuspendLayout();
                 dgvOrcamentos.SkipAutoAdjust = true;
+                _suprimirSelectionChanged = true;
                 try
                 {
                     dgvOrcamentos.DataSource = new SortableBindingList<OrcamentoResumo>(dados);
@@ -154,12 +250,14 @@ namespace CONTROLE_DE_PEDIDOS
                 }
                 finally
                 {
+                    _suprimirSelectionChanged = false;
                     dgvOrcamentos.SkipAutoAdjust = false;
                     dgvOrcamentos.ResumeLayout(true);
                 }
             }
             catch (Exception ex)
             {
+                _assinaturaOrcamentos = "";
                 dgvOrcamentos.DataSource = null;
                 lblContagem.Text = "";
                 Logger.Error("Erro ao carregar orçamentos", ex);
@@ -237,24 +335,28 @@ namespace CONTROLE_DE_PEDIDOS
                         var config = _db.Config;
                         var enriquecimento = await _db.ConsultarIntegraAsync(async conn =>
                         {
-                            var dict = new Dictionary<int, (int pedidoVenda, string vendedor)>();
+                            var dict = new Dictionary<int, (int pedidoVenda, string vendedor, bool conferidoIntegra)>();
                             using var cmd = conn.CreateCommand();
-                            var paramList = string.Join(",", dados.Select((_, i) => $"@p{i}"));
-                            cmd.CommandText = $@"
-                                SELECT e.orcamento, e.pedido_venda, COALESCE(f.nome, '') AS vendedor
+                            // '= ANY(@ids)' em vez de 'IN (@p0..@pN)': com o IN dinâmico o
+                            // TEXTO da query mudava a cada variação na quantidade de pedidos,
+                            // forçando o servidor a replanejar toda vez (planejamento medido
+                            // em ~2,6ms contra 0,4ms de execução — 7x mais caro que executar).
+                            cmd.CommandText = @"
+                                SELECT e.orcamento, e.pedido_venda, COALESCE(f.nome, '') AS vendedor,
+                                       COALESCE(e.status_conferencia, '') AS status_conf
                                 FROM estorc e
                                 LEFT JOIN cadfun f ON f.funcionario = e.vendedor
-                                WHERE e.filial = @filial AND e.orcamento IN ({paramList})";
+                                WHERE e.filial = @filial AND e.orcamento = ANY(@ids)";
                             cmd.Parameters.AddWithValue("filial", config.Filial);
-                            for (int i = 0; i < dados.Count; i++)
-                                cmd.Parameters.AddWithValue($"p{i}", dados[i].Orcamento);
+                            cmd.Parameters.AddWithValue("ids", dados.Select(d => d.Orcamento).ToArray());
                             using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
                             while (await reader.ReadAsync().ConfigureAwait(false))
                             {
                                 int orc = reader.GetInt32(0);
                                 int pv = await reader.IsDBNullAsync(1).ConfigureAwait(false) ? 0 : reader.GetInt32(1);
                                 string vend = await reader.IsDBNullAsync(2).ConfigureAwait(false) ? "" : reader.GetString(2);
-                                dict[orc] = (pv, vend);
+                                string statusConf = await reader.IsDBNullAsync(3).ConfigureAwait(false) ? "" : reader.GetString(3);
+                                dict[orc] = (pv, vend, statusConf.Trim() == "S");
                             }
                             return dict;
                         });
@@ -267,6 +369,7 @@ namespace CONTROLE_DE_PEDIDOS
                                 {
                                     p.PedidoVenda = info.pedidoVenda;
                                     p.Vendedor = info.vendedor;
+                                    p.ConferidoIntegra = info.conferidoIntegra;
                                 }
                             }
                         }
@@ -276,6 +379,14 @@ namespace CONTROLE_DE_PEDIDOS
                         Logger.Warn("Erro ao buscar pedido_venda/vendedor", ex);
                     }
                 }
+
+                // Dirty check: rebind + repaint do grid custa ~45ms e é o item mais caro
+                // do ciclo (×10 sessões no RDS). Como a tela muda poucas vezes por hora,
+                // comparar em memória antes evita pagar isso à toa em ~97% dos refreshes.
+                string assinatura = AssinaturaPedidos(dados);
+                if (assinatura == _assinaturaPedidos && dgvPedidos.DataSource != null)
+                    return;
+                _assinaturaPedidos = assinatura;
 
                 // Atualizar master list preservando referências existentes quando possível
                 AtualizarMasterList(dados);
@@ -287,10 +398,32 @@ namespace CONTROLE_DE_PEDIDOS
             catch (Exception ex)
             {
                 _pedidosTodos = [];
+                _assinaturaPedidos = "";
                 dgvPedidos.DataSource = null;
                 lblContagemPedidos.Text = "";
                 Logger.Error("Erro ao carregar pedidos", ex);
             }
+        }
+
+        /// <summary>
+        /// Assinatura de todo o conteúdo exibido do grid de pedidos. Precisa incluir
+        /// TODOS os campos visíveis — um campo de fora vira mudança que a tela nunca mostra.
+        /// </summary>
+        private static string AssinaturaPedidos(List<PedidoControlado> lista)
+        {
+            const char sep = '\u001F';   // unit separator: nunca aparece nos dados
+            var sb = new System.Text.StringBuilder(lista.Count * 48);
+            foreach (var p in lista)
+            {
+                sb.Append(p.Orcamento).Append(sep).Append(p.Cliente).Append(sep)
+                  .Append(p.NomeFantasia).Append(sep).Append(p.Rota).Append(sep)
+                  .Append(p.Vendedor).Append(sep).Append(p.PedidoVenda).Append(sep)
+                  .Append(p.Aprovado ? '1' : '0').Append(p.EmSeparacao ? '1' : '0')
+                  .Append(p.Conferido ? '1' : '0').Append(p.Liberado ? '1' : '0')
+                  .Append(p.Travado ? '1' : '0').Append(p.EmFaturamento ? '1' : '0')
+                  .Append(p.ConferidoIntegra ? '1' : '0').Append('\n');
+            }
+            return sb.ToString();
         }
 
         private void AtualizarMasterList(List<PedidoControlado> novos)
@@ -331,6 +464,72 @@ namespace CONTROLE_DE_PEDIDOS
             finally
             {
                 _recarregando = false;
+            }
+        }
+
+        /// <summary>
+        /// Outra instância gravou algo no banco de controle. Chega em ~1ms pelo canal do
+        /// PostgreSQL, em thread de background — precisa marshalar para a UI.
+        /// O coalescing evita rajadas: várias notificações seguidas viram um refresh só.
+        /// </summary>
+        private void Db_MudancaNotificada(object? sender, string motivo)
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+
+            try
+            {
+                BeginInvoke(() =>
+                {
+                    if (!_dadosIniciaisCarregados || !_sessaoAtiva) return;
+                    Logger.Info($"Notificação recebida ('{motivo}') — atualizando.");
+                    _mudancaPendente = true;
+                    timerCoalescer.Stop();
+                    timerCoalescer.Start();
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Falha ao processar notificação de mudança: {ex.Message}");
+            }
+        }
+
+        private async void TimerCoalescer_Tick(object? sender, EventArgs e)
+        {
+            timerCoalescer.Stop();
+            if (!_mudancaPendente) return;
+            _mudancaPendente = false;
+
+            try
+            {
+                // Só o banco de controle mudou — não precisa reconsultar o Integra inteiro,
+                // mas CarregarPedidosAsync já reenriquece, então recarregamos os dois grids
+                // para cobrir também o caso de aprovação feita por outro operador.
+                await RecarregarDadosAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao atualizar após notificação de mudança", ex);
+            }
+        }
+
+        /// <summary>
+        /// Tick do auto-refresh. Para o timer durante o ciclo (evita empilhamento se um
+        /// ciclo demorar mais que o intervalo) e reprograma com novo jitter ao final.
+        /// </summary>
+        private async void TimerAutoRefresh_Tick(object? sender, EventArgs e)
+        {
+            timerAutoRefresh.Stop();
+            try
+            {
+                await RecarregarDadosAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro no auto-refresh", ex);
+            }
+            finally
+            {
+                AgendarProximoRefresh();
             }
         }
 
@@ -433,6 +632,8 @@ namespace CONTROLE_DE_PEDIDOS
                     await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                 });
 
+                _db.NotificarMudanca("ignorados");   // some da lista de pendentes dos outros
+
                 // Atualiza o estado local e a grid manualmente
                 _ignorados.Add(orc.Orcamento);
                 if (dgvOrcamentos.DataSource is SortableBindingList<OrcamentoResumo> listaOrcamentos)
@@ -477,7 +678,8 @@ namespace CONTROLE_DE_PEDIDOS
                 _dadosIniciaisCarregados = true;
                 _ = _db.GarantirTabelasAsync();
                 await RecarregarDadosAsync();
-                timerAutoRefresh.Start();
+                AgendarProximoRefresh();
+                _db.IniciarEscutaMudancas();   // ações de outros operadores chegam em ~1s
             }
             else if (e.StatusControle == StatusConexao.Conectado && _dadosIniciaisCarregados)
             {
@@ -485,9 +687,20 @@ namespace CONTROLE_DE_PEDIDOS
                 await CarregarPedidosAsync();
             }
 
-            // Parar auto-refresh se desconectou
             if (e.StatusIntegra == StatusConexao.Desconectado)
+            {
+                // Parar auto-refresh enquanto o Integra está fora
                 timerAutoRefresh.Stop();
+            }
+            else if (e.StatusIntegra == StatusConexao.Conectado && _dadosIniciaisCarregados
+                     && !timerAutoRefresh.Enabled)
+            {
+                // Integra voltou: religar o auto-refresh e recarregar o que se perdeu.
+                // Antes o timer ficava parado até reabrir o app ou salvar a configuração.
+                Logger.Info("Integra reconectado — auto-refresh religado.");
+                AgendarProximoRefresh();
+                await RecarregarDadosAsync();
+            }
 
             StatusConexao pior;
             if (e.StatusIntegra == StatusConexao.Desconectado || e.StatusControle == StatusConexao.Desconectado)
@@ -743,45 +956,55 @@ namespace CONTROLE_DE_PEDIDOS
 
             try
             {
-                var linhas = await _db.ExecutarControleComLinhasAsync(async conn =>
-                {
-                    using var cmd = conn.CreateCommand();
-                    cmd.CommandText = $@"
-                        UPDATE pedidos_controlados SET {coluna} = TRUE
-                        WHERE orcamento = @orc AND travado = FALSE AND em_faturamento = FALSE
-                          AND aprovado = @aprov AND em_separacao = @em_sep AND conferido = @conf AND liberado = @lib";
-                    cmd.Parameters.AddWithValue("orc", pedido.Orcamento);
-                    cmd.Parameters.AddWithValue("aprov", pedido.Aprovado);
-                    cmd.Parameters.AddWithValue("em_sep", pedido.EmSeparacao);
-                    cmd.Parameters.AddWithValue("conf", pedido.Conferido);
-                    cmd.Parameters.AddWithValue("lib", pedido.Liberado);
-                    return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-                });
-
-                if (linhas > 0)
-                {
-                    // Atualiza o objeto na lista e notifica a grid
-                    switch (coluna)
-                    {
-                        case "aprovado": pedido.Aprovado = true; break;
-                        case "em_separacao": pedido.EmSeparacao = true; break;
-                        case "conferido": pedido.Conferido = true; break;
-                        case "liberado": pedido.Liberado = true; break;
-                    }
-                    AplicarFiltros();
-                }
-                else
-                {
-                    MessageBox.Show(this, "O status deste pedido foi alterado por outro usuário.\nA tela será atualizada.",
-                        "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
-                }
+                await ExecutarAvancoStatusAsync(pedido, coluna);
             }
             catch (Exception ex)
             {
                 MessageBox.Show(this, $"Erro ao avançar status: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        /// <summary>
+        /// Avança o pedido para a coluna de status indicada com optimistic locking
+        /// (WHERE com todas as flags atuais). Retorna true se avançou; em conflito
+        /// (0 linhas), avisa e recarrega o grid.
+        /// </summary>
+        private async Task<bool> ExecutarAvancoStatusAsync(PedidoControlado pedido, string coluna)
+        {
+            var linhas = await _db.ExecutarControleComLinhasAsync(async conn =>
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $@"
+                    UPDATE pedidos_controlados SET {coluna} = TRUE
+                    WHERE orcamento = @orc AND travado = FALSE AND em_faturamento = FALSE
+                      AND aprovado = @aprov AND em_separacao = @em_sep AND conferido = @conf AND liberado = @lib";
+                cmd.Parameters.AddWithValue("orc", pedido.Orcamento);
+                cmd.Parameters.AddWithValue("aprov", pedido.Aprovado);
+                cmd.Parameters.AddWithValue("em_sep", pedido.EmSeparacao);
+                cmd.Parameters.AddWithValue("conf", pedido.Conferido);
+                cmd.Parameters.AddWithValue("lib", pedido.Liberado);
+                return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            });
+
+            if (linhas > 0)
+            {
+                // Atualiza o objeto na lista e notifica a grid
+                switch (coluna)
+                {
+                    case "aprovado": pedido.Aprovado = true; break;
+                    case "em_separacao": pedido.EmSeparacao = true; break;
+                    case "conferido": pedido.Conferido = true; break;
+                    case "liberado": pedido.Liberado = true; break;
+                }
+                AplicarFiltros();
+                return true;
+            }
+
+            MessageBox.Show(this, "O status deste pedido foi alterado por outro usuário.\nA tela será atualizada.",
+                "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            await CarregarPedidosAsync();
+            return false;
         }
 
         private async void BtnRetornarStatus_Click(object? sender, EventArgs e)
@@ -800,6 +1023,17 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 MessageBox.Show(this, "Este pedido está em faturamento. Não é possível alterar o status.\nO operador responsável deve largá-lo primeiro.",
                     "Pedido em Faturamento", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // Conferência veio exclusivamente do Integra: a etapa visível é "Conferido",
+            // mas não há flag manual a desfazer — bloquear com orientação.
+            if (!pedido.Liberado && !pedido.Conferido && pedido.ConferidoIntegra)
+            {
+                MessageBox.Show(this,
+                    "A conferência deste pedido foi registrada pelo Integra (status de conferência 'S').\n" +
+                    "Ela não pode ser desfeita por este sistema — a reversão da conferência deve ser feita no próprio Integra.",
+                    "Conferência do Integra", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -873,7 +1107,7 @@ namespace CONTROLE_DE_PEDIDOS
                 return;
             }
 
-            if (!pedido.EmSeparacao || !pedido.Conferido || !pedido.Liberado)
+            if (!pedido.EmSeparacao || !pedido.ConferidoEfetivo || !pedido.Liberado)
             {
                 MessageBox.Show(this, "Este pedido ainda não cumpriu todas as etapas anteriores.\nÉ necessário que esteja Em Separação, Conferido e Liberado.",
                     "Etapas Pendentes", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -885,8 +1119,11 @@ namespace CONTROLE_DE_PEDIDOS
                 var linhas = await _db.ExecutarControleComLinhasAsync(async conn =>
                 {
                     using var cmd = conn.CreateCommand();
-                    cmd.CommandText = "UPDATE pedidos_controlados SET em_faturamento = TRUE WHERE orcamento = @orc AND em_faturamento = FALSE AND em_separacao = TRUE AND conferido = TRUE AND liberado = TRUE";
+                    // conferido usa lock de igualdade (não exigência de TRUE): a conferência
+                    // pode estar satisfeita apenas pelo Integra (status_conferencia = 'S').
+                    cmd.CommandText = "UPDATE pedidos_controlados SET em_faturamento = TRUE WHERE orcamento = @orc AND em_faturamento = FALSE AND em_separacao = TRUE AND conferido = @conf AND liberado = TRUE";
                     cmd.Parameters.AddWithValue("orc", pedido.Orcamento);
+                    cmd.Parameters.AddWithValue("conf", pedido.Conferido);
                     return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                 });
 
@@ -955,7 +1192,7 @@ namespace CONTROLE_DE_PEDIDOS
         {
             if (!p.Aprovado) return "aprovado";
             if (!p.EmSeparacao) return "em_separacao";
-            if (!p.Conferido) return "conferido";
+            if (!p.ConferidoEfetivo) return "conferido";
             if (!p.Liberado) return "liberado";
             return null;
         }
@@ -972,8 +1209,412 @@ namespace CONTROLE_DE_PEDIDOS
 
         private int _orcamentoDetalheAtual;
 
+        private async void BtnImprimirSeparacao_Click(object? sender, EventArgs e)
+        {
+            if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
+            await ImprimirSeparacaoAsync(pedido.Orcamento, pedido, this);
+        }
+
+        /// <summary>
+        /// Fluxo completo do Relatório de Separação para um orçamento qualquer (controlado ou não).
+        /// pedidoParaAvanco: quando informado (botão do grid), a impressão FÍSICA dispara
+        /// APROVADO → EM SEPARAÇÃO; null (mini-janela "Imprimir por Orçamento") = nenhum
+        /// efeito colateral. owner: dono dos MessageBoxes e do preview — obrigatório
+        /// porque a mini-janela é modal e o preview faz ShowDialog(owner).
+        /// </summary>
+        private async Task ImprimirSeparacaoAsync(int orcamento, PedidoControlado? pedidoParaAvanco, Form owner)
+        {
+            if (!_db.IntegraConectado)
+            {
+                MessageBox.Show(owner, "Sem conexão com o banco Integra.", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                var config = _db.Config;
+                var dados = await _db.ConsultarIntegraAsync(async conn =>
+                {
+                    SeparacaoCabecalho? cab = null;
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+                            SELECT e.orcamento,
+                                   COALESCE(e.vendedor::text, '')              AS vend_cod,
+                                   COALESCE(f.nome, '')                        AS vend_nome,
+                                   COALESCE(e.observacao, '')                  AS obs,
+                                   COALESCE(e.cliente::text, '')               AS cli_cod,
+                                   COALESCE(c.nome, '')                        AS cli_nome,
+                                   COALESCE(c.fantasia, '')                    AS fantasia,
+                                   COALESCE(c.endereco, '')                    AS endereco,
+                                   COALESCE(c.numero::text, '')                AS numero,
+                                   COALESCE(c.bairro, '')                      AS bairro,
+                                   COALESCE(NULLIF(e.cidade, ''), c.cidade, '') AS cidade,
+                                   COALESCE(NULLIF(e.estado, ''), c.estado, '') AS estado,
+                                   e.data_inc,
+                                   COALESCE(e.hora_inc, '')                    AS hora_inc
+                            FROM estorc e
+                            LEFT JOIN cadfun f ON f.funcionario = e.vendedor
+                            LEFT JOIN cadcli c ON c.cliente = e.cliente
+                            WHERE e.filial = @filial AND e.orcamento = @orc";
+                        cmd.Parameters.AddWithValue("filial", config.Filial);
+                        cmd.Parameters.AddWithValue("orc", orcamento);
+                        using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                        if (await reader.ReadAsync().ConfigureAwait(false))
+                        {
+                            var partesEndereco = new[] { reader.GetString(7), reader.GetString(8), reader.GetString(9) }
+                                .Where(s => !string.IsNullOrWhiteSpace(s));
+                            cab = new SeparacaoCabecalho
+                            {
+                                Orcamento = reader.GetInt32(0),
+                                VendedorCodigo = reader.GetString(1),
+                                VendedorNome = reader.GetString(2),
+                                Observacao = reader.GetString(3),
+                                ClienteCodigo = reader.GetString(4),
+                                ClienteNome = reader.GetString(5),
+                                Fantasia = reader.GetString(6),
+                                Endereco = string.Join(", ", partesEndereco),
+                                Cidade = reader.GetString(10),
+                                Estado = reader.GetString(11),
+                                DataPedido = FormatarDataPedido(reader, 12, 13)
+                            };
+                        }
+                    }
+
+                    var itens = new List<SeparacaoItem>();
+                    if (cab != null)
+                    {
+                        using var cmd = conn.CreateCommand();
+                        string filtroCancelado = config.SeparacaoOcultarCancelados
+                            ? "AND COALESCE(i.cancelado, 'N') <> 'S'"
+                            : "";
+                        string ordenacao = config.SeparacaoOrdenarPorLocal
+                            ? "COALESCE(s.local, ''), i.descricao, i.item"
+                            : "i.descricao, i.item";
+                        cmd.CommandText = $@"
+                            SELECT i.item,
+                                   i.matricula::text                           AS matricula,
+                                   COALESCE(i.descricao, '')                   AS descricao,
+                                   i.quantidade,
+                                   COALESCE(s.local, '')                       AS local,
+                                   COALESCE(s.referencia, '')                  AS referencia,
+                                   COALESCE(s.marca, '')                       AS marca,
+                                   CASE WHEN sys.atividade = 'V'
+                                        THEN COALESCE(s.anteriorv,0) + COALESCE(s.entradav,0) - COALESCE(s.saidav,0)
+                                        ELSE COALESCE(s.anteriora,0) + COALESCE(s.entradaa,0) - COALESCE(s.saidaa,0)
+                                   END                                         AS saldo_atual,
+                                   CASE WHEN sys.atividade = 'V'
+                                        THEN COALESCE(s.anteriorv,0) + COALESCE(s.entradav,0) - COALESCE(s.saidav,0)
+                                             - COALESCE(s.consignacaov,0) - COALESCE(s.condicionalv,0)
+                                             - COALESCE(s.consertov,0) - COALESCE(s.servico,0)
+                                             - COALESCE(s.estoque_reserva,0) + COALESCE(s.entregafuturav,0)
+                                        ELSE COALESCE(s.anteriora,0) + COALESCE(s.entradaa,0) - COALESCE(s.saidaa,0)
+                                             - COALESCE(s.consignacaoa,0) - COALESCE(s.condicionala,0)
+                                             - COALESCE(s.consertoa,0) - COALESCE(s.servico,0)
+                                             - COALESCE(s.estoque_reserva,0) + COALESCE(s.entregafuturaa,0)
+                                   END                                         AS estoque_fisico,
+                                   COALESCE(p.unidade, '')                     AS unidade
+                            FROM estior i
+                            LEFT JOIN estsal s ON s.filial = i.filial AND s.matricula = i.matricula
+                            LEFT JOIN cadpro p ON p.matricula = i.matricula
+                            CROSS JOIN (SELECT COALESCE((SELECT atividade FROM cadsys LIMIT 1), 'V') AS atividade) sys
+                            WHERE i.filial = @filial AND i.orcamento = @orc
+                              {filtroCancelado}
+                            ORDER BY {ordenacao}";
+                        cmd.Parameters.AddWithValue("filial", config.Filial);
+                        cmd.Parameters.AddWithValue("orc", orcamento);
+                        using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                        while (await reader.ReadAsync().ConfigureAwait(false))
+                        {
+                            itens.Add(new SeparacaoItem
+                            {
+                                Item = Convert.ToInt32(reader.GetValue(0)),
+                                Matricula = reader.GetString(1),
+                                Descricao = reader.GetString(2),
+                                Quantidade = reader.GetDecimal(3),
+                                Local = reader.GetString(4),
+                                Referencia = reader.GetString(5),
+                                Marca = reader.GetString(6),
+                                SaldoAtual = reader.GetDecimal(7),
+                                EstoqueFisico = reader.GetDecimal(8),
+                                Unidade = reader.GetString(9)
+                            });
+                        }
+                    }
+
+                    return (cab, itens);
+                });
+
+                if (dados.cab == null)
+                {
+                    MessageBox.Show(owner, $"Orçamento {orcamento} não encontrado no Integra.",
+                        "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                if (dados.itens.Count == 0)
+                {
+                    MessageBox.Show(owner, "Nenhum item para separar neste orçamento.",
+                        "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                using var doc = new RelatorioSeparacaoPrintDoc(dados.cab, dados.itens,
+                    config.SeparacaoPaisagem, config.SeparacaoCasasDecimais);
+
+                if (pedidoParaAvanco is { } pedido)
+                {
+                    bool jaAvancou = false;
+                    doc.ImpressaoRealConcluida += () =>
+                    {
+                        // Só a transição APROVADO → EM SEPARAÇÃO é automática; reimpressões
+                        // em qualquer outro status não mexem em nada.
+                        if (jaAvancou) return;
+                        if (!pedido.Aprovado || pedido.EmSeparacao) return;
+                        if (pedido.Travado || pedido.EmFaturamento) return;
+                        jaAvancou = true;
+                        _ = AvancarAposImpressaoAsync(pedido);
+                    };
+                }
+
+                Logger.Info($"Separação {orcamento}: DataPedido='{dados.cab.DataPedido}' (estorc.data_inc/hora_inc)");
+                PrintingHelper.LogarEstado(doc, "Imprimir Separação de Mercadorias");
+                PrintingHelper.ExibirPreviewComImpressao(owner, doc, "Imprimir Separação de Mercadorias", () =>
+                {
+                    // PrintDialog reescreve DefaultPageSettings — re-força A4/orientação/margens
+                    doc.DefaultPageSettings.PaperSize = PrintingHelper.CriarPaperSizeA4();
+                    doc.DefaultPageSettings.Landscape = config.SeparacaoPaisagem;
+                    doc.DefaultPageSettings.Margins = new System.Drawing.Printing.Margins(25, 25, 25, 25);
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao gerar relatório de separação", ex);
+                MessageBox.Show(owner, $"Erro ao gerar relatório de separação: {ex.Message}", "Erro",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private async Task AvancarAposImpressaoAsync(PedidoControlado pedido)
+        {
+            try
+            {
+                if (!_db.ControleConectado) return;
+                await ExecutarAvancoStatusAsync(pedido, "em_separacao");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao avançar status após impressão da separação", ex);
+            }
+        }
+
+        /// <summary>
+        /// Data/hora do pedido registrada no Integra (estorc.data_inc + hora_inc) já
+        /// formatada para impressão. hora_inc é texto "HH:MM" pronto — sai verbatim,
+        /// sem parse. data_inc nula → "—" (convenção do app para ausente).
+        /// </summary>
+        private static string FormatarDataPedido(System.Data.Common.DbDataReader reader, int ordData, int ordHora)
+        {
+            if (reader.IsDBNull(ordData)) return "—";
+            var data = reader.GetDateTime(ordData);
+            string hora = reader.GetString(ordHora).Trim();
+            return hora.Length > 0 ? $"{data:dd/MM/yyyy} {hora}" : data.ToString("dd/MM/yyyy");
+        }
+
+        private async void BtnCopiaPedido_Click(object? sender, EventArgs e)
+        {
+            if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
+            await ImprimirCopiaPedidoAsync(pedido.Orcamento, this);
+        }
+
+        /// <summary>
+        /// Fluxo completo da Cópia de Pedido para um orçamento qualquer (controlado ou não).
+        /// Nunca altera status. owner: dono dos MessageBoxes e do preview (a mini-janela
+        /// "Imprimir por Orçamento" é modal — ver ImprimirSeparacaoAsync).
+        /// </summary>
+        private async Task ImprimirCopiaPedidoAsync(int orcamento, Form owner)
+        {
+            if (!_db.IntegraConectado)
+            {
+                MessageBox.Show(owner, "Sem conexão com o banco Integra.", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                var config = _db.Config;
+                var dados = await _db.ConsultarIntegraAsync(async conn =>
+                {
+                    CopiaPedidoCabecalho? cab = null;
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+                            SELECT e.orcamento,
+                                   COALESCE(e.vendedor::text, '')               AS vend_cod,
+                                   COALESCE(f.nome, '')                         AS vend_nome,
+                                   COALESCE(e.observacao, '')                   AS obs,
+                                   COALESCE(e.cliente::text, '')                AS cli_cod,
+                                   COALESCE(c.nome, '')                         AS cli_nome,
+                                   COALESCE(c.fantasia, '')                     AS fantasia,
+                                   COALESCE(c.endereco, '')                     AS endereco,
+                                   COALESCE(c.numero::text, '')                 AS numero,
+                                   COALESCE(c.bairro, '')                       AS bairro,
+                                   COALESCE(NULLIF(e.cidade, ''), c.cidade, '') AS cidade,
+                                   COALESCE(NULLIF(e.estado, ''), c.estado, '') AS estado,
+                                   COALESCE(c.cep, '')                          AS cep,
+                                   COALESCE(c.natureza, '')                     AS natureza,
+                                   COALESCE(c.cpf, '')                          AS cpf,
+                                   COALESCE(c.identidade, '')                   AS identidade,
+                                   COALESCE(c.ddd, '')                          AS ddd,
+                                   COALESCE(c.fone, '')                         AS fone,
+                                   COALESCE(c.ddd_celular, '')                  AS ddd_celular,
+                                   COALESCE(c.celular, '')                      AS celular,
+                                   COALESCE(c.e_mail, '')                       AS e_mail,
+                                   COALESCE(e.texto01, '')                      AS texto01,
+                                   COALESCE(e.texto02, '')                      AS texto02,
+                                   COALESCE(e.texto03, '')                      AS texto03,
+                                   COALESCE(e.texto04, '')                      AS texto04,
+                                   COALESCE(e.vr_total, 0)                      AS vr_total,
+                                   e.data_inc,
+                                   COALESCE(e.hora_inc, '')                     AS hora_inc,
+                                   COALESCE(e.vr_negociado, 0)                  AS vr_negociado
+                            FROM estorc e
+                            LEFT JOIN cadfun f ON f.funcionario = e.vendedor
+                            LEFT JOIN cadcli c ON c.cliente = e.cliente
+                            WHERE e.filial = @filial AND e.orcamento = @orc";
+                        cmd.Parameters.AddWithValue("filial", config.Filial);
+                        cmd.Parameters.AddWithValue("orc", orcamento);
+                        using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                        if (await reader.ReadAsync().ConfigureAwait(false))
+                        {
+                            var partesEndereco = new[] { reader.GetString(7), reader.GetString(8), reader.GetString(9) }
+                                .Where(s => !string.IsNullOrWhiteSpace(s));
+                            cab = new CopiaPedidoCabecalho
+                            {
+                                Orcamento = reader.GetInt32(0),
+                                VendedorCodigo = reader.GetString(1),
+                                VendedorNome = reader.GetString(2),
+                                Observacao = reader.GetString(3),
+                                ClienteCodigo = reader.GetString(4),
+                                ClienteNome = reader.GetString(5),
+                                Fantasia = reader.GetString(6),
+                                Endereco = string.Join(", ", partesEndereco),
+                                Cidade = reader.GetString(10),
+                                Estado = reader.GetString(11),
+                                Cep = reader.GetString(12),
+                                Natureza = reader.GetString(13).Trim().ToUpperInvariant(),
+                                CpfCnpj = reader.GetString(14),
+                                Identidade = reader.GetString(15).Trim(),
+                                Ddd = reader.GetString(16),
+                                Fone = reader.GetString(17),
+                                DddCelular = reader.GetString(18),
+                                Celular = reader.GetString(19),
+                                Email = reader.GetString(20),
+                                Texto01 = reader.GetString(21),
+                                Texto02 = reader.GetString(22),
+                                Texto03 = reader.GetString(23),
+                                Texto04 = reader.GetString(24),
+                                VrTotal = reader.GetDecimal(25),
+                                DataPedido = FormatarDataPedido(reader, 26, 27),
+                                VrNegociado = reader.GetDecimal(28)
+                            };
+                        }
+                    }
+
+                    var itens = new List<CopiaPedidoItem>();
+                    if (cab != null)
+                    {
+                        using var cmd = conn.CreateCommand();
+                        // Cliente nunca vê item cancelado — filtro fixo, sem opção de config.
+                        string ordenacao = config.CopiaOrdenarAlfabetica
+                            ? "i.descricao, i.item"
+                            : "i.item";
+                        cmd.CommandText = $@"
+                            SELECT i.item,
+                                   i.matricula::text          AS matricula,
+                                   COALESCE(i.descricao, '')  AS descricao,
+                                   i.quantidade,
+                                   COALESCE(i.vr_unitario, 0) AS vr_unitario,
+                                   COALESCE(i.vr_total, 0)    AS vr_total,
+                                   COALESCE(s.marca, '')      AS marca,
+                                   COALESCE(s.referencia, '') AS referencia
+                            FROM estior i
+                            LEFT JOIN estsal s ON s.filial = i.filial AND s.matricula = i.matricula
+                            WHERE i.filial = @filial AND i.orcamento = @orc
+                              AND COALESCE(i.cancelado, 'N') <> 'S'
+                            ORDER BY {ordenacao}";
+                        cmd.Parameters.AddWithValue("filial", config.Filial);
+                        cmd.Parameters.AddWithValue("orc", orcamento);
+                        using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                        while (await reader.ReadAsync().ConfigureAwait(false))
+                        {
+                            itens.Add(new CopiaPedidoItem
+                            {
+                                Item = Convert.ToInt32(reader.GetValue(0)),
+                                Matricula = reader.GetString(1),
+                                Descricao = reader.GetString(2),
+                                Quantidade = reader.GetDecimal(3),
+                                VrUnitario = reader.GetDecimal(4),
+                                VrTotal = reader.GetDecimal(5),
+                                Marca = reader.GetString(6),
+                                Referencia = reader.GetString(7)
+                            });
+                        }
+                    }
+
+                    return (cab, itens);
+                });
+
+                if (dados.cab == null)
+                {
+                    MessageBox.Show(owner, $"Orçamento {orcamento} não encontrado no Integra.",
+                        "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                if (dados.itens.Count == 0)
+                {
+                    MessageBox.Show(owner, "Nenhum item ativo neste orçamento — cópia não gerada.",
+                        "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Nº da NF: mesma correlação best-effort do Relatório de NF-e (estmov na
+                // filial fiscal). Ausente = pedido ainda não faturado → imprime "—".
+                var nfs = await _db.BuscarNotasFiscaisAsync([orcamento]);
+                dados.cab.NotaFiscal = nfs.TryGetValue(orcamento, out var nf) ? nf : "";
+
+                // SEM wiring de ImpressaoRealConcluida: a Cópia de Pedido nunca altera status.
+                using var doc = new RelatorioCopiaPedidoPrintDoc(dados.cab, dados.itens,
+                    EmpresaDados.De(config), config.CopiaPaisagem);
+
+                Logger.Info($"Cópia de Pedido {orcamento}: DataPedido='{dados.cab.DataPedido}' (estorc.data_inc/hora_inc)");
+                PrintingHelper.LogarEstado(doc, "Cópia de Pedido");
+                PrintingHelper.ExibirPreviewComImpressao(owner, doc, "Cópia de Pedido", () =>
+                {
+                    // PrintDialog reescreve DefaultPageSettings — re-força A4/orientação/margens
+                    doc.DefaultPageSettings.PaperSize = PrintingHelper.CriarPaperSizeA4();
+                    doc.DefaultPageSettings.Landscape = config.CopiaPaisagem;
+                    doc.DefaultPageSettings.Margins = new System.Drawing.Printing.Margins(40, 40, 40, 40);
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao gerar Cópia de Pedido", ex);
+                MessageBox.Show(owner, $"Erro ao gerar Cópia de Pedido: {ex.Message}", "Erro",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         private void DgvSelectionChanged(object? sender, EventArgs e)
         {
+            // Durante um refresh a troca de DataSource mexe na seleção dos dois grids e
+            // dispararia detalhes de orçamentos que o usuário não escolheu (roubando o
+            // painel e gerando queries extras). Só seleção real do usuário conta.
+            if (_suprimirSelectionChanged) return;
+
             int? orcamento = null;
 
             if (sender == dgvOrcamentos && dgvOrcamentos.CurrentRow?.DataBoundItem is OrcamentoResumo orc)
@@ -1151,6 +1792,26 @@ namespace CONTROLE_DE_PEDIDOS
             dialog.ShowDialog(this);
         }
 
+        private void MenuImprimirPorOrcamento_Click(object? sender, EventArgs e)
+        {
+            // Gate só no Integra: a impressão não precisa do banco de controle. Com o
+            // controle offline o chip degrada para "Não controlado" — aceitável.
+            if (!_db.IntegraConectado)
+            {
+                MessageBox.Show(this, $"Sem conexão com o banco {_db.Config.BancoIntegra}.", "Aviso",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using var dialog = new ImprimirPorOrcamentoDialog(
+                localizarControlado: orc => _pedidosTodos.FirstOrDefault(p => p.Orcamento == orc),
+                // Decisão do usuário: impressão pela mini-janela NUNCA avança status
+                // (pedidoParaAvanco: null) — o botão do grid continua avançando.
+                imprimirSeparacao: (orc, owner) => ImprimirSeparacaoAsync(orc, null, owner),
+                imprimirCopia: ImprimirCopiaPedidoAsync);
+            dialog.ShowDialog(this);
+        }
+
         private void BtnConfig_Click(object? sender, EventArgs e)
         {
             using var dialog = new ConfigDialog(_db.Config);
@@ -1163,6 +1824,8 @@ namespace CONTROLE_DE_PEDIDOS
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            // SystemEvents é estático: sem desanexar, o form vaza
+            Microsoft.Win32.SystemEvents.SessionSwitch -= SessionSwitchHandler;
             _db.Dispose();
             base.OnFormClosed(e);
         }
@@ -1192,13 +1855,32 @@ namespace CONTROLE_DE_PEDIDOS
         {
             var filtrados = _pedidosTodos.Where(PassaFiltros).ToList();
 
-            if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> existente)
+            // O AtualizarInPlace dispara ResetBindings (duas vezes quando há ordenação
+            // ativa), e um Reset joga a célula corrente para a linha 0 e o scroll para o
+            // topo. Sem preservar isso, refresh frequente tira a linha debaixo do cursor
+            // do operador — e os botões de ação agem sobre CurrentRow.
+            int orcamentoSelecionado = dgvPedidos.CurrentRow?.DataBoundItem is PedidoControlado sel
+                ? sel.Orcamento : 0;
+            int primeiraLinhaVisivel = dgvPedidos.FirstDisplayedScrollingRowIndex;
+            int colunaSelecionada = dgvPedidos.CurrentCell?.ColumnIndex ?? 0;
+
+            _suprimirSelectionChanged = true;
+            try
             {
-                existente.AtualizarInPlace(filtrados, p => p.Orcamento, (src, dst) => dst.CopiarDe(src));
+                if (dgvPedidos.DataSource is SortableBindingList<PedidoControlado> existente)
+                {
+                    existente.AtualizarInPlace(filtrados, p => p.Orcamento, (src, dst) => dst.CopiarDe(src));
+                }
+                else
+                {
+                    dgvPedidos.DataSource = new SortableBindingList<PedidoControlado>(filtrados);
+                }
+
+                RestaurarSelecaoPedidos(orcamentoSelecionado, primeiraLinhaVisivel, colunaSelecionada);
             }
-            else
+            finally
             {
-                dgvPedidos.DataSource = new SortableBindingList<PedidoControlado>(filtrados);
+                _suprimirSelectionChanged = false;
             }
 
             int total = _pedidosTodos.Count;
@@ -1213,6 +1895,42 @@ namespace CONTROLE_DE_PEDIDOS
             PersistirFiltros();
         }
 
+        /// <summary>
+        /// Recoloca a seleção no mesmo orçamento e devolve o scroll à posição anterior.
+        /// Silencioso: falhas aqui nunca podem quebrar um refresh.
+        /// </summary>
+        private void RestaurarSelecaoPedidos(int orcamento, int primeiraLinhaVisivel, int coluna)
+        {
+            try
+            {
+                if (orcamento > 0)
+                {
+                    for (int i = 0; i < dgvPedidos.Rows.Count; i++)
+                    {
+                        if (dgvPedidos.Rows[i].DataBoundItem is not PedidoControlado p || p.Orcamento != orcamento)
+                            continue;
+
+                        if (dgvPedidos.CurrentRow?.Index != i)
+                        {
+                            dgvPedidos.ClearSelection();
+                            dgvPedidos.Rows[i].Selected = true;
+                            int col = Math.Clamp(coluna, 0, dgvPedidos.ColumnCount - 1);
+                            if (dgvPedidos.Rows[i].Cells[col].Visible)
+                                dgvPedidos.CurrentCell = dgvPedidos.Rows[i].Cells[col];
+                        }
+                        break;
+                    }
+                }
+
+                if (primeiraLinhaVisivel >= 0 && primeiraLinhaVisivel < dgvPedidos.RowCount)
+                    dgvPedidos.FirstDisplayedScrollingRowIndex = primeiraLinhaVisivel;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Falha ao restaurar seleção do grid de pedidos: {ex.Message}");
+            }
+        }
+
         private void PersistirFiltros()
         {
             FilterStore.SalvarDebounced(
@@ -1223,6 +1941,15 @@ namespace CONTROLE_DE_PEDIDOS
 
         private void AtualizarOpcoesDropdowns()
         {
+            // Repopular destrói e recria os itens — se o usuário estiver com o dropdown
+            // aberto, eles somem debaixo do cursor. Como vendedores/rotas quase nunca
+            // mudam entre refreshes, sair cedo cobre a esmagadora maioria dos ciclos.
+            var vendedores = _pedidosTodos.Select(p => NormalizarVendedor(p.Vendedor)).Distinct().Order();
+            var rotas = _pedidosTodos.Select(p => NormalizarRota(p.Rota)).Distinct().Order();
+            string assinatura = string.Join("\u001F", vendedores) + "\u001E" + string.Join("\u001F", rotas);
+            if (assinatura == _assinaturaDropdowns) return;
+            _assinaturaDropdowns = assinatura;
+
             PopularDropDownStrings(
                 btnFiltroVendedor,
                 _pedidosTodos.Select(p => NormalizarVendedor(p.Vendedor)),
@@ -1472,9 +2199,18 @@ namespace CONTROLE_DE_PEDIDOS
         public bool EmFaturamento { get; set; }
         public int PedidoVenda { get; set; }
 
+        /// <summary>Conferência registrada no Integra (estorc.status_conferencia = 'S'). Vem do enriquecimento, read-only.</summary>
+        public bool ConferidoIntegra { get; set; }
+
+        /// <summary>Conferência satisfeita por qualquer via (Integra tem precedência visual).</summary>
+        public bool ConferidoEfetivo => Conferido || ConferidoIntegra;
+
         public string AprovadoTexto => Travado ? "TRAVADO" : (Aprovado ? "SIM" : "NÃO");
         public string EmSeparacaoTexto => Travado ? "TRAVADO" : (EmSeparacao ? "SIM" : "NÃO");
-        public string ConferidoTexto => Travado ? "TRAVADO" : (Conferido ? "SIM" : "NÃO");
+        public string ConferidoTexto => Travado ? "TRAVADO"
+            : ConferidoIntegra ? "OK"
+            : Conferido ? "MANUAL"
+            : "NÃO";
         public string LiberadoTexto => Travado ? "TRAVADO" : (Liberado ? "SIM" : "NÃO");
         public string FaturadoTexto => PedidoVenda > 0 ? PedidoVenda.ToString() : (EmFaturamento ? "EM FATURAMENTO" : "NÃO");
 
@@ -1486,7 +2222,7 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 if (PedidoVenda > 0) return EtapaPedido.Faturado;
                 if (Liberado) return EtapaPedido.LiberadoParaFaturamento;
-                if (Conferido) return EtapaPedido.Conferido;
+                if (ConferidoEfetivo) return EtapaPedido.Conferido;
                 if (EmSeparacao) return EtapaPedido.EmSeparacao;
                 if (Aprovado) return EtapaPedido.Aprovado;
                 return EtapaPedido.NaoAprovado;
@@ -1506,6 +2242,7 @@ namespace CONTROLE_DE_PEDIDOS
             Travado = outro.Travado;
             EmFaturamento = outro.EmFaturamento;
             PedidoVenda = outro.PedidoVenda;
+            ConferidoIntegra = outro.ConferidoIntegra;
         }
     }
 

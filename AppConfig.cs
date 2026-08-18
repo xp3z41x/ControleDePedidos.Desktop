@@ -13,6 +13,23 @@ namespace CONTROLE_DE_PEDIDOS
         public int Filial { get; set; } = 1;
         public int OrcamentoMinimo { get; set; } = 0;
         public int FilialFiscal { get; set; } = 1;
+        public bool SeparacaoPaisagem { get; set; } = false;
+        public bool SeparacaoOcultarCancelados { get; set; } = true;
+        public bool SeparacaoOrdenarPorLocal { get; set; } = false;
+        public bool SeparacaoCasasDecimais { get; set; } = false;
+        public bool CopiaPaisagem { get; set; } = false;
+        public bool CopiaOrdenarAlfabetica { get; set; } = false;
+
+        // Dados da empresa impressos no cabecalho da Copia de Pedido.
+        // Texto livre; campo vazio e simplesmente omitido do relatorio.
+        public string EmpresaRazaoSocial { get; set; } = "";
+        public string EmpresaCnpj { get; set; } = "";
+        public string EmpresaInscricaoEstadual { get; set; } = "";
+        public string EmpresaEndereco { get; set; } = "";
+        public string EmpresaCidadeUfCep { get; set; } = "";
+        public string EmpresaTelefone { get; set; } = "";
+        public string EmpresaEmail { get; set; } = "";
+        public string EmpresaWhatsApp { get; set; } = "";
 
         // SOMENTE LEITURA - opcoes forcam read-only no nivel da sessao PostgreSQL
         public string ConnectionStringIntegra =>
@@ -47,7 +64,27 @@ namespace CONTROLE_DE_PEDIDOS
                 $"OrcamentoMinimo={OrcamentoMinimo}",
                 "",
                 "[Fiscal]",
-                $"FilialFiscal={FilialFiscal}"
+                $"FilialFiscal={FilialFiscal}",
+                "",
+                "[Separacao]",
+                $"SeparacaoPaisagem={SeparacaoPaisagem}",
+                $"SeparacaoOcultarCancelados={SeparacaoOcultarCancelados}",
+                $"SeparacaoOrdenarPorLocal={SeparacaoOrdenarPorLocal}",
+                $"SeparacaoCasasDecimais={SeparacaoCasasDecimais}",
+                "",
+                "[CopiaPedido]",
+                $"CopiaPaisagem={CopiaPaisagem}",
+                $"CopiaOrdenarAlfabetica={CopiaOrdenarAlfabetica}",
+                "",
+                "[Empresa]",
+                $"EmpresaRazaoSocial={EmpresaRazaoSocial}",
+                $"EmpresaCnpj={EmpresaCnpj}",
+                $"EmpresaInscricaoEstadual={EmpresaInscricaoEstadual}",
+                $"EmpresaEndereco={EmpresaEndereco}",
+                $"EmpresaCidadeUfCep={EmpresaCidadeUfCep}",
+                $"EmpresaTelefone={EmpresaTelefone}",
+                $"EmpresaEmail={EmpresaEmail}",
+                $"EmpresaWhatsApp={EmpresaWhatsApp}"
             };
             try
             {
@@ -92,6 +129,20 @@ namespace CONTROLE_DE_PEDIDOS
                     case "Filial": if (int.TryParse(value, out var filial)) config.Filial = filial; break;
                     case "OrcamentoMinimo": if (int.TryParse(value, out var orcMin)) config.OrcamentoMinimo = orcMin; break;
                     case "FilialFiscal": if (int.TryParse(value, out var filialFiscal)) config.FilialFiscal = filialFiscal; break;
+                    case "SeparacaoPaisagem": if (bool.TryParse(value, out var sepPais)) config.SeparacaoPaisagem = sepPais; break;
+                    case "SeparacaoOcultarCancelados": if (bool.TryParse(value, out var sepCanc)) config.SeparacaoOcultarCancelados = sepCanc; break;
+                    case "SeparacaoOrdenarPorLocal": if (bool.TryParse(value, out var sepLocal)) config.SeparacaoOrdenarPorLocal = sepLocal; break;
+                    case "SeparacaoCasasDecimais": if (bool.TryParse(value, out var sepDec)) config.SeparacaoCasasDecimais = sepDec; break;
+                    case "CopiaPaisagem": if (bool.TryParse(value, out var copPais)) config.CopiaPaisagem = copPais; break;
+                    case "CopiaOrdenarAlfabetica": if (bool.TryParse(value, out var copAlfa)) config.CopiaOrdenarAlfabetica = copAlfa; break;
+                    case "EmpresaRazaoSocial": config.EmpresaRazaoSocial = value; break;
+                    case "EmpresaCnpj": config.EmpresaCnpj = value; break;
+                    case "EmpresaInscricaoEstadual": config.EmpresaInscricaoEstadual = value; break;
+                    case "EmpresaEndereco": config.EmpresaEndereco = value; break;
+                    case "EmpresaCidadeUfCep": config.EmpresaCidadeUfCep = value; break;
+                    case "EmpresaTelefone": config.EmpresaTelefone = value; break;
+                    case "EmpresaEmail": config.EmpresaEmail = value; break;
+                    case "EmpresaWhatsApp": config.EmpresaWhatsApp = value; break;
                     // compatibilidade com config antiga
                     case "BancoDados": config.BancoIntegra = value; break;
                 }

@@ -11,6 +11,20 @@ namespace CONTROLE_DE_PEDIDOS
         private TextBox txtFilial = null!;
         private TextBox txtOrcamentoMinimo = null!;
         private TextBox txtFilialFiscal = null!;
+        private CheckBox chkSeparacaoPaisagem = null!;
+        private CheckBox chkSeparacaoOcultarCancelados = null!;
+        private CheckBox chkSeparacaoOrdenarPorLocal = null!;
+        private CheckBox chkSeparacaoCasasDecimais = null!;
+        private CheckBox chkCopiaPaisagem = null!;
+        private CheckBox chkCopiaOrdenarAlfabetica = null!;
+        private TextBox txtEmpresaRazao = null!;
+        private TextBox txtEmpresaCnpj = null!;
+        private TextBox txtEmpresaIE = null!;
+        private TextBox txtEmpresaEndereco = null!;
+        private TextBox txtEmpresaCidadeUfCep = null!;
+        private TextBox txtEmpresaFone = null!;
+        private TextBox txtEmpresaEmail = null!;
+        private TextBox txtEmpresaWhats = null!;
         private Button btnSalvar = null!;
         private Button btnCancelar = null!;
         private Button btnTestar = null!;
@@ -91,7 +105,8 @@ namespace CONTROLE_DE_PEDIDOS
                 BackColor = Theme.BgDark
             };
 
-            int contentWidth = 440 - (MargemX * 2);
+            int larguraJanela = LogicalToDeviceUnits(440);
+            int contentWidth = larguraJanela - (MargemX * 2);
             int y = MargemTop;
 
             // Secao: Servidor
@@ -121,6 +136,35 @@ namespace CONTROLE_DE_PEDIDOS
             y = AdicionarSecao(container, "FISCAL", y, contentWidth);
             y = AdicionarCampo(container, "Filial Fiscal", out txtFilialFiscal, Config.FilialFiscal.ToString(), y, contentWidth);
 
+            y += 10;
+
+            // Secao: Relatorio de Separacao
+            y = AdicionarSecao(container, "RELATÓRIO DE SEPARAÇÃO", y, contentWidth);
+            y = AdicionarCheckBox(container, "Imprimir em paisagem (padrão: retrato)", out chkSeparacaoPaisagem, Config.SeparacaoPaisagem, y);
+            y = AdicionarCheckBox(container, "Ocultar itens cancelados", out chkSeparacaoOcultarCancelados, Config.SeparacaoOcultarCancelados, y);
+            y = AdicionarCheckBox(container, "Ordenar itens por LOCAL (sub-ordem descrição)", out chkSeparacaoOrdenarPorLocal, Config.SeparacaoOrdenarPorLocal, y);
+            y = AdicionarCheckBox(container, "Exibir quantidades/estoques com 2 casas decimais", out chkSeparacaoCasasDecimais, Config.SeparacaoCasasDecimais, y);
+
+            y += 10;
+
+            // Secao: Copia de Pedido
+            y = AdicionarSecao(container, "CÓPIA DE PEDIDO", y, contentWidth);
+            y = AdicionarCheckBox(container, "Imprimir em paisagem (padrão: retrato)", out chkCopiaPaisagem, Config.CopiaPaisagem, y);
+            y = AdicionarCheckBox(container, "Ordenar itens alfabeticamente (padrão: ordem do pedido)", out chkCopiaOrdenarAlfabetica, Config.CopiaOrdenarAlfabetica, y);
+
+            y += 10;
+
+            // Secao: Dados da empresa (cabecalho da Copia de Pedido)
+            y = AdicionarSecao(container, "DADOS DA EMPRESA (CÓPIA DE PEDIDO)", y, contentWidth);
+            y = AdicionarCampo(container, "Razão Social", out txtEmpresaRazao, Config.EmpresaRazaoSocial, y, contentWidth);
+            y = AdicionarCampo(container, "CNPJ", out txtEmpresaCnpj, Config.EmpresaCnpj, y, contentWidth);
+            y = AdicionarCampo(container, "Inscrição Estadual", out txtEmpresaIE, Config.EmpresaInscricaoEstadual, y, contentWidth);
+            y = AdicionarCampo(container, "Endereço (rua, nº, bairro)", out txtEmpresaEndereco, Config.EmpresaEndereco, y, contentWidth);
+            y = AdicionarCampo(container, "Cidade / UF / CEP", out txtEmpresaCidadeUfCep, Config.EmpresaCidadeUfCep, y, contentWidth);
+            y = AdicionarCampo(container, "Telefone", out txtEmpresaFone, Config.EmpresaTelefone, y, contentWidth);
+            y = AdicionarCampo(container, "E-mail", out txtEmpresaEmail, Config.EmpresaEmail, y, contentWidth);
+            y = AdicionarCampo(container, "WhatsApp", out txtEmpresaWhats, Config.EmpresaWhatsApp, y, contentWidth);
+
             // Status
             lblStatus = new Label
             {
@@ -141,7 +185,11 @@ namespace CONTROLE_DE_PEDIDOS
             // Calcular altura ideal: conteudo + botoes + bordas
             int alturaConteudo = y + MargemTop;
             int alturaTotal = alturaConteudo + panelBotoes.Height;
-            ClientSize = new Size(440, alturaTotal);
+            ClientSize = new Size(larguraJanela, alturaTotal);
+
+            // Em telas de pouca altura (ex.: 1366x768) o dialog é clampado à área útil;
+            // o container (AutoScroll) passa a rolar e os botões ficam sempre visíveis.
+            Load += (_, _) => Theme.LimitarAoWorkingArea(this);
 
             ResumeLayout(false);
             PerformLayout();
@@ -193,6 +241,24 @@ namespace CONTROLE_DE_PEDIDOS
             container.Controls.Add(textBox);
 
             return y + 48;
+        }
+
+        private int AdicionarCheckBox(Panel container, string label, out CheckBox checkBox, bool value, int y)
+        {
+            checkBox = new CheckBox
+            {
+                Text = label,
+                Checked = value,
+                AutoSize = true,
+                Location = new Point(MargemX, y),
+                ForeColor = Theme.TextPrimary,
+                Font = Theme.FontRegular,
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand
+            };
+            container.Controls.Add(checkBox);
+
+            return y + 30;
         }
 
         private async void BtnTestar_Click(object? sender, EventArgs e)
@@ -266,6 +332,20 @@ namespace CONTROLE_DE_PEDIDOS
             Config.Filial = int.TryParse(txtFilial.Text.Trim(), out var f) ? f : Config.Filial;
             Config.OrcamentoMinimo = int.TryParse(txtOrcamentoMinimo.Text.Trim(), out var o) ? o : Config.OrcamentoMinimo;
             Config.FilialFiscal = int.TryParse(txtFilialFiscal.Text.Trim(), out var ff) ? ff : Config.FilialFiscal;
+            Config.SeparacaoPaisagem = chkSeparacaoPaisagem.Checked;
+            Config.SeparacaoOcultarCancelados = chkSeparacaoOcultarCancelados.Checked;
+            Config.SeparacaoOrdenarPorLocal = chkSeparacaoOrdenarPorLocal.Checked;
+            Config.SeparacaoCasasDecimais = chkSeparacaoCasasDecimais.Checked;
+            Config.CopiaPaisagem = chkCopiaPaisagem.Checked;
+            Config.CopiaOrdenarAlfabetica = chkCopiaOrdenarAlfabetica.Checked;
+            Config.EmpresaRazaoSocial = txtEmpresaRazao.Text.Trim();
+            Config.EmpresaCnpj = txtEmpresaCnpj.Text.Trim();
+            Config.EmpresaInscricaoEstadual = txtEmpresaIE.Text.Trim();
+            Config.EmpresaEndereco = txtEmpresaEndereco.Text.Trim();
+            Config.EmpresaCidadeUfCep = txtEmpresaCidadeUfCep.Text.Trim();
+            Config.EmpresaTelefone = txtEmpresaFone.Text.Trim();
+            Config.EmpresaEmail = txtEmpresaEmail.Text.Trim();
+            Config.EmpresaWhatsApp = txtEmpresaWhats.Text.Trim();
         }
     }
 }

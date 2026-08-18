@@ -35,6 +35,8 @@ namespace CONTROLE_DE_PEDIDOS
         // Status cells
         public static readonly Color StatusSimBg = Color.FromArgb(22, 60, 32);
         public static readonly Color StatusSimFg = Color.FromArgb(63, 185, 80);
+        public static readonly Color StatusManualBg = Color.FromArgb(31, 75, 45);
+        public static readonly Color StatusManualFg = Color.FromArgb(126, 231, 135);
         public static readonly Color StatusNaoBg = Color.FromArgb(60, 22, 22);
         public static readonly Color StatusNaoFg = Color.FromArgb(248, 81, 73);
         public static readonly Color StatusTravadoBg = Color.FromArgb(60, 50, 10);
@@ -76,15 +78,49 @@ namespace CONTROLE_DE_PEDIDOS
             txt.Font = FontRegular;
         }
 
+        /// <summary>
+        /// Garante que o form caiba na área útil do monitor do Owner (ou o próprio),
+        /// reduzindo o ClientSize se necessário e mantendo-o centrado e contido na tela.
+        /// Chamar no Load (o Owner já está definido pelo ShowDialog).
+        /// </summary>
+        public static void LimitarAoWorkingArea(Form f, int margem = 48)
+        {
+            var tela = Screen.FromControl(f.Owner ?? f).WorkingArea;
+            var moldura = new Size(f.Width - f.ClientSize.Width, f.Height - f.ClientSize.Height);
+            int maxW = tela.Width - margem - moldura.Width;
+            int maxH = tela.Height - margem - moldura.Height;
+
+            // MinimumSize não pode impedir o clamp
+            if (f.MinimumSize.Width > 0 || f.MinimumSize.Height > 0)
+                f.MinimumSize = new Size(
+                    Math.Min(f.MinimumSize.Width, maxW + moldura.Width),
+                    Math.Min(f.MinimumSize.Height, maxH + moldura.Height));
+
+            var novo = new Size(Math.Min(f.ClientSize.Width, maxW), Math.Min(f.ClientSize.Height, maxH));
+            if (novo != f.ClientSize) f.ClientSize = novo;
+
+            // Recentrar no Owner (o CenterParent foi computado com o tamanho antigo) e conter na tela
+            if (f.Owner is { } o)
+                f.Location = new Point(o.Left + (o.Width - f.Width) / 2, o.Top + (o.Height - f.Height) / 2);
+            f.Location = new Point(
+                Math.Max(tela.Left, Math.Min(f.Left, tela.Right - f.Width)),
+                Math.Max(tela.Top, Math.Min(f.Top, tela.Bottom - f.Height)));
+        }
+
         public static void EstilizarGrid(DataGridView dgv, string gridKey)
         {
             EstilizarGrid(dgv);
             dgv.Tag = gridKey;
+            GridLayout.Ativar(dgv, gridKey);
 
             dgv.ColumnWidthChanged += (_, e) =>
             {
                 var col = dgv.Columns[e.Column.Index];
                 if (col.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill) return;
+                // Larguras aplicadas pelo encolhimento proporcional não são preferência
+                // do usuário — persistir apenas o drag manual.
+                if (GridLayout.EstaAjustando(dgv)) return;
+                GridLayout.AtualizarPreferencia(dgv, col.Name, col.Width);
                 ColumnWidthStore.SetWidth(gridKey, col.Name, col.Width);
             };
         }
@@ -122,7 +158,10 @@ namespace CONTROLE_DE_PEDIDOS
                 if (dgv is OptimizedDataGridView odgv && odgv.SkipAutoAdjust)
                     return;
 
-                dgv.BeginInvoke(() => AutoAjustarColunas(dgv));
+                // Sem handle na cadeia (ex.: grid num form host ainda não exibido),
+                // BeginInvoke lança — o GridLayout reaplica no HandleCreated.
+                if (dgv.IsHandleCreated)
+                    dgv.BeginInvoke(() => AutoAjustarColunas(dgv));
             };
             dgv.ColumnHeadersHeight = 36;
             dgv.RowTemplate.Height = 32;
@@ -142,50 +181,100 @@ namespace CONTROLE_DE_PEDIDOS
             dgv.ColumnHeadersDefaultCellStyle.ForeColor = TextPrimary;
             dgv.ColumnHeadersDefaultCellStyle.Font = FontHeader;
             dgv.ColumnHeadersDefaultCellStyle.Padding = new Padding(8, 6, 8, 6);
-            dgv.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
+            dgv.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            // Título nunca quebra linha: sem espaço, o texto é abreviado com reticências
+            dgv.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.False;
+
+            // Pintura manual dos headers: o DataGridView reserva espaço para o glifo de
+            // ordenação à direita, então o MiddleCenter nativo centraliza o texto só na
+            // área restante (desvio à esquerda que varia com a largura da coluna).
+            // Aqui o texto centraliza na célula INTEIRA e o glifo é desenhado por cima.
+            dgv.CellPainting += (_, e) =>
+            {
+                if (e.RowIndex != -1 || e.ColumnIndex < 0) return;
+
+                e.PaintBackground(e.ClipBounds, true);
+
+                string texto = e.FormattedValue?.ToString() ?? "";
+                var fonte = e.CellStyle?.Font ?? FontHeader;
+                var corTexto = e.CellStyle?.ForeColor ?? TextPrimary;
+                TextRenderer.DrawText(e.Graphics!, texto, fonte, e.CellBounds, corTexto,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                    TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis |
+                    TextFormatFlags.NoPrefix);
+
+                var glifo = dgv.Columns[e.ColumnIndex].HeaderCell.SortGlyphDirection;
+                if (glifo != SortOrder.None)
+                {
+                    int cx = e.CellBounds.Right - 14;
+                    int cy = e.CellBounds.Top + e.CellBounds.Height / 2;
+                    using var brush = new SolidBrush(TextSecondary);
+                    Point[] seta = glifo == SortOrder.Ascending
+                        ? [new Point(cx - 4, cy + 2), new Point(cx + 4, cy + 2), new Point(cx, cy - 3)]
+                        : [new Point(cx - 4, cy - 2), new Point(cx + 4, cy - 2), new Point(cx, cy + 3)];
+                    e.Graphics!.FillPolygon(brush, seta);
+                }
+
+                e.Handled = true;
+            };
         }
 
         public static void AutoAjustarColunas(DataGridView dgv)
         {
             if (dgv.Columns.Count == 0 || dgv.RowCount == 0) return;
 
-            // Se existem larguras salvas pelo usuário, aplicá-las e pular auto-sizing
+            // Se existem larguras salvas pelo usuário, elas viram as preferidas e o
+            // encolhimento proporcional decide se cabem exatas ou escaladas
             if (dgv.Tag is string gridKey && ColumnWidthStore.HasWidths(gridKey))
             {
-                foreach (DataGridViewColumn col in dgv.Columns)
+                GridLayout.ExecutarProgramatico(dgv, () =>
                 {
-                    if (!col.Visible) continue;
-                    if (ColumnWidthStore.TryGetWidth(gridKey, col.Name, out int savedWidth))
-                        col.Width = savedWidth;
-                }
+                    foreach (DataGridViewColumn col in dgv.Columns)
+                    {
+                        if (!col.Visible) continue;
+                        if (ColumnWidthStore.TryGetWidth(gridKey, col.Name, out int savedWidth))
+                            col.Width = savedWidth;
+                    }
+                });
+                GridLayout.DefinirPreferencias(dgv);
+                GridLayout.Aplicar(dgv);
                 return;
             }
 
-            using var g = dgv.CreateGraphics();
+            // Teto do auto-fit por conteúdo (escalado por DPI): sem ele, um texto muito
+            // longo cria preferências absurdas que estouram qualquer tela
+            int teto = dgv.LogicalToDeviceUnits(400);
 
-            foreach (DataGridViewColumn col in dgv.Columns)
+            GridLayout.ExecutarProgramatico(dgv, () =>
             {
-                if (!col.Visible) continue;
+                using var g = dgv.CreateGraphics();
 
-                // Medir header
-                var headerSize = g.MeasureString(col.HeaderText ?? "", dgv.ColumnHeadersDefaultCellStyle.Font ?? dgv.Font);
-                int maxWidth = (int)headerSize.Width + 24; // padding
-
-                // Medir conteudo das celulas (amostra das primeiras 50 linhas)
-                int rowsToCheck = Math.Min(dgv.RowCount, 50);
-                for (int i = 0; i < rowsToCheck; i++)
+                foreach (DataGridViewColumn col in dgv.Columns)
                 {
-                    var val = dgv.Rows[i].Cells[col.Index].FormattedValue?.ToString();
-                    if (string.IsNullOrEmpty(val)) continue;
-                    var cellFont = dgv.Rows[i].Cells[col.Index].InheritedStyle.Font ?? dgv.Font;
-                    var cellSize = g.MeasureString(val, cellFont);
-                    int cellWidth = (int)cellSize.Width + 24;
-                    if (cellWidth > maxWidth) maxWidth = cellWidth;
-                }
+                    if (!col.Visible) continue;
 
-                int minWidth = col.MinimumWidth > 0 ? col.MinimumWidth : 50;
-                col.Width = Math.Max(maxWidth, minWidth);
-            }
+                    // Medir header
+                    var headerSize = g.MeasureString(col.HeaderText ?? "", dgv.ColumnHeadersDefaultCellStyle.Font ?? dgv.Font);
+                    int maxWidth = (int)headerSize.Width + 24; // padding
+
+                    // Medir conteudo das celulas (amostra das primeiras 50 linhas)
+                    int rowsToCheck = Math.Min(dgv.RowCount, 50);
+                    for (int i = 0; i < rowsToCheck; i++)
+                    {
+                        var val = dgv.Rows[i].Cells[col.Index].FormattedValue?.ToString();
+                        if (string.IsNullOrEmpty(val)) continue;
+                        var cellFont = dgv.Rows[i].Cells[col.Index].InheritedStyle.Font ?? dgv.Font;
+                        var cellSize = g.MeasureString(val, cellFont);
+                        int cellWidth = (int)cellSize.Width + 24;
+                        if (cellWidth > maxWidth) maxWidth = cellWidth;
+                    }
+
+                    int minWidth = col.MinimumWidth > 0 ? col.MinimumWidth : 50;
+                    col.Width = Math.Clamp(maxWidth, minWidth, Math.Max(teto, minWidth));
+                }
+            });
+            GridLayout.DefinirPreferencias(dgv);
+            GridLayout.Aplicar(dgv);
         }
     }
 

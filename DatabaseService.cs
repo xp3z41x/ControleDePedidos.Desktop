@@ -60,7 +60,21 @@ namespace CONTROLE_DE_PEDIDOS
         private int _verificando;
         private bool _bancoControleGarantido;
 
+        // --- LISTEN/NOTIFY: avisa as outras instâncias quando alguém grava algo ---
+        private const string CanalMudancas = "cp_mudou";
+        /// <summary>Identifica esta instância no payload: quem gravou já atualizou a própria
+        /// tela na hora, então ignora o próprio aviso e evita um refresh redundante.</summary>
+        private static readonly string IdInstancia = Guid.NewGuid().ToString("N")[..8];
+        private CancellationTokenSource? _ctsListener;
+        private Task? _tarefaListener;
+
         public event EventHandler<StatusConexaoEventArgs>? StatusAlterado;
+
+        /// <summary>
+        /// Disparado (em thread de background) quando OUTRA instância grava algo no banco
+        /// de controle. Quem assina deve marshalar para a UI.
+        /// </summary>
+        public event EventHandler<string>? MudancaNotificada;
 
         public StatusConexao StatusIntegra => _statusIntegra;
         public StatusConexao StatusControle => _statusControle;
@@ -91,6 +105,141 @@ namespace CONTROLE_DE_PEDIDOS
         public void Iniciar(int intervaloMs = 15000)
         {
             _timer.Change(0, intervaloMs);
+        }
+
+        // ==================================================================
+        // NOTIFICAÇÃO ENTRE INSTÂNCIAS (LISTEN/NOTIFY do PostgreSQL)
+        // Com 10+ usuários no mesmo servidor, esperar o próximo ciclo do timer para ver
+        // o que outro operador acabou de fazer é o que mais incomoda. O NOTIFY entrega
+        // isso em ~1ms e custa praticamente nada: a conexão fica ociosa esperando.
+        // Só vale para o banco PRÓPRIO — o banco do Integra é read-only e intocável.
+        // ==================================================================
+
+        /// <summary>
+        /// Avisa as outras instâncias que algo mudou. Silencioso por design: uma falha
+        /// aqui não pode derrubar a operação que acabou de ser gravada com sucesso —
+        /// o refresh periódico continua sendo a rede de segurança.
+        /// </summary>
+        public async Task NotificarMudancaAsync(string motivo)
+        {
+            try
+            {
+                await using var conn = new NpgsqlConnection(_config.ConnectionStringControle);
+                await conn.OpenAsync().ConfigureAwait(false);
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT pg_notify(@canal, @payload)";
+                cmd.Parameters.AddWithValue("canal", CanalMudancas);
+                cmd.Parameters.AddWithValue("payload", $"{motivo}|{IdInstancia}");
+                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Falha ao notificar mudança ('{motivo}'): {ex.Message}");
+            }
+        }
+
+        /// <summary>Versão fire-and-forget para usar nos handlers de UI.</summary>
+        public void NotificarMudanca(string motivo) => _ = NotificarMudancaAsync(motivo);
+
+        /// <summary>
+        /// Abre a escuta de notificações. A conexão é DEDICADA e sem pooling: ao devolver
+        /// uma conexão ao pool o Npgsql emite DISCARD ALL, que cancela o LISTEN
+        /// silenciosamente. Reconecta sozinha em caso de queda.
+        /// </summary>
+        public void IniciarEscutaMudancas()
+        {
+            if (_tarefaListener != null) return;
+            _ctsListener = new CancellationTokenSource();
+            _tarefaListener = Task.Run(() => LoopEscutaAsync(_ctsListener.Token));
+        }
+
+        private async Task LoopEscutaAsync(CancellationToken ct)
+        {
+            int falhasSeguidas = 0;
+
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    if (!ControleConectado)
+                    {
+                        await Task.Delay(5000, ct).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    // Pooling=false é obrigatório (DISCARD ALL mataria o LISTEN);
+                    // Keepalive evita que firewall/SO derrubem a conexão ociosa —
+                    // o default do Npgsql é 0 (desligado).
+                    var csb = new NpgsqlConnectionStringBuilder(_config.ConnectionStringControle)
+                    {
+                        Pooling = false,
+                        KeepAlive = 30,
+                        ApplicationName = "ControleDePedidos-Listener"
+                    };
+
+                    await using var conn = new NpgsqlConnection(csb.ConnectionString);
+                    conn.Notification += (_, args) =>
+                    {
+                        try
+                        {
+                            string payload = args.Payload ?? "";
+                            // Ignora o próprio aviso: quem gravou já atualizou a tela
+                            if (payload.EndsWith($"|{IdInstancia}", StringComparison.Ordinal)) return;
+
+                            int sep = payload.IndexOf('|');
+                            MudancaNotificada?.Invoke(this, sep >= 0 ? payload[..sep] : payload);
+                        }
+                        catch (Exception ex) { Logger.Warn($"Erro no handler de notificação: {ex.Message}"); }
+                    };
+
+                    await conn.OpenAsync(ct).ConfigureAwait(false);
+                    await using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = $"LISTEN {CanalMudancas}";
+                        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                    }
+
+                    if (falhasSeguidas > 0)
+                        Logger.Info("Escuta de mudanças restabelecida.");
+                    falhasSeguidas = 0;
+
+                    // Bloqueia até chegar notificação (ou a conexão cair)
+                    while (!ct.IsCancellationRequested)
+                        await conn.WaitAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    falhasSeguidas++;
+                    // Só loga as primeiras falhas: se o banco cair de vez, não adianta
+                    // encher o log a cada tentativa.
+                    if (falhasSeguidas <= 3)
+                        Logger.Warn($"Escuta de mudanças caiu ({ex.GetType().Name}: {ex.Message}); reconectando.");
+
+                    int espera = Math.Min(30000, 2000 * falhasSeguidas);   // backoff até 30s
+                    try { await Task.Delay(espera, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { return; }
+                }
+            }
+        }
+
+        private void PararEscutaMudancas()
+        {
+            try
+            {
+                _ctsListener?.Cancel();
+                _tarefaListener?.Wait(TimeSpan.FromSeconds(2));
+            }
+            catch { /* encerrando o app — nada a fazer */ }
+            finally
+            {
+                _ctsListener?.Dispose();
+                _ctsListener = null;
+                _tarefaListener = null;
+            }
         }
 
         public void AtualizarConfig(AppConfig novaConfig)
@@ -310,14 +459,29 @@ namespace CONTROLE_DE_PEDIDOS
             await operacao(conn).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Executa uma operação de ESCRITA no banco de controle e devolve as linhas
+        /// afetadas. Quando algo é de fato gravado, avisa as outras instâncias pelo canal
+        /// de notificação — centralizar aqui garante que nenhum ponto de escrita fique
+        /// sem avisar (são 8 fluxos diferentes: avançar, retornar, travar, destravar,
+        /// assumir, largar, alterar rota, excluir).
+        /// </summary>
         public async Task<int> ExecutarControleComLinhasAsync(Func<NpgsqlConnection, Task<int>> operacao)
         {
             if (!ControleConectado)
                 throw new InvalidOperationException($"Sem conexão com o banco {_config.BancoControle}.");
 
-            using var conn = new NpgsqlConnection(_config.ConnectionStringControle);
-            await conn.OpenAsync().ConfigureAwait(false);
-            return await operacao(conn).ConfigureAwait(false);
+            int linhas;
+            using (var conn = new NpgsqlConnection(_config.ConnectionStringControle))
+            {
+                await conn.OpenAsync().ConfigureAwait(false);
+                linhas = await operacao(conn).ConfigureAwait(false);
+            }
+
+            if (linhas > 0)
+                await NotificarMudancaAsync("pedidos").ConfigureAwait(false);
+
+            return linhas;
         }
 
         // =====================================================================
@@ -434,6 +598,10 @@ namespace CONTROLE_DE_PEDIDOS
                 }
 
                 await tx.CommitAsync().ConfigureAwait(false);
+
+                if (linhas > 0)
+                    await NotificarMudancaAsync("exclusao").ConfigureAwait(false);
+
                 return linhas;
             }
             catch
@@ -556,6 +724,7 @@ namespace CONTROLE_DE_PEDIDOS
 
         public void Dispose()
         {
+            PararEscutaMudancas();
             _timer.Dispose();
         }
     }
