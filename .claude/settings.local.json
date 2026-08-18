@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(git clone https://github.com/xp3z41x/ControleDePedidos.Desktop.git C:\\\\CLAUDE\\\\ControleDePedidos.Desktop)"
+    ]
+  }
+}
