@@ -58,10 +58,11 @@ namespace CONTROLE_DE_PEDIDOS
 
         // Faixa superior: card de pendentes à esquerda + card de detalhes à direita.
         // A altura é ancorada num número INTEIRO de linhas do grid de pendentes (evita
-        // meia-linha cortada); a sobra volta para o grid de pedidos.
-        private const int PendentesCromoH = 80;      // 2 padding + 36 header + 1 + 1 + 40 ações
-        private const int GridHeaderH     = 36;      // Theme: ColumnHeadersHeight
-        private const int GridRowH        = 32;      // Theme: RowTemplate.Height
+        // meia-linha cortada); a sobra volta para o grid de pedidos. O cromo do card e a
+        // altura da linha são MEDIDOS dos controles (ver AlturaCromoPendentes), não Dpi()
+        // de constantes: header/ações/RowTemplate têm alturas fixas que o AutoScaleMode.Font
+        // não escala (sem AutoScaleDimensions), então Dpi(constante) acima de 100% superestimava
+        // tudo e deixava meia linha cortada / sobra no rodapé do card.
         private const float TopoFracao      = 0.32f;
         private const int TopoMinLinhas     = 3;
         private const int TopoMaxLinhas     = 6;
@@ -1083,8 +1084,8 @@ namespace CONTROLE_DE_PEDIDOS
 
             // Altura da faixa superior ancorada em nº INTEIRO de linhas do grid de
             // pendentes: sem isso sobraria meia linha cortada no rodapé do card.
-            int cromoTopo = Dpi(PendentesCromoH + GridHeaderH);
-            int linhaGrid = Dpi(GridRowH);
+            int cromoTopo = AlturaCromoPendentes();
+            int linhaGrid = Math.Max(1, dgvOrcamentos.RowTemplate.Height);
             int linhasTopo = Math.Clamp(
                 ((int)(containerHeight * TopoFracao) - cromoTopo) / linhaGrid,
                 TopoMinLinhas, TopoMaxLinhas);
@@ -1110,6 +1111,21 @@ namespace CONTROLE_DE_PEDIDOS
             panelPedidos.Location = new Point(0, alturaTopo + inner);
             panelPedidos.Size = new Size(containerWidth,
                 Math.Max(containerHeight - alturaTopo - inner, Dpi(100)));
+        }
+
+        /// <summary>
+        /// Altura de tudo no card de pendentes que não é linha de dados: padding do card,
+        /// faixas Dock Top/Bottom (header, separadores, ações) e o cabeçalho de colunas.
+        /// </summary>
+        private int AlturaCromoPendentes()
+        {
+            int h = panelOrcamentos.Padding.Vertical;
+            foreach (Control c in panelOrcamentos.Controls)
+                if (c != dgvOrcamentos && c.Dock is DockStyle.Top or DockStyle.Bottom)
+                    h += c.Height;
+            if (dgvOrcamentos.ColumnHeadersVisible)
+                h += dgvOrcamentos.ColumnHeadersHeight;
+            return h;
         }
 
         private void PosicionarElementosStatusBar()
