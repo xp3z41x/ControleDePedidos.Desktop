@@ -9,6 +9,16 @@ namespace CONTROLE_DE_PEDIDOS
         Desconectado
     }
 
+    /// <summary>Resultado de <see cref="DatabaseService.ExcluirPedidoComHistoricoAsync"/>.</summary>
+    public enum ResultadoExclusao
+    {
+        Excluido,
+        /// <summary>A linha não existe mais: outro usuário já excluiu.</summary>
+        JaExcluido,
+        /// <summary>A linha existe com estado diferente do esperado: outro usuário alterou.</summary>
+        Alterado
+    }
+
     public class StatusConexaoEventArgs : EventArgs
     {
         public StatusConexao StatusIntegra { get; }
@@ -550,9 +560,9 @@ namespace CONTROLE_DE_PEDIDOS
         // HISTORICO DE EXCLUSOES
         // Lookup de NFes no integra (best-effort) + exclusao atomica
         // (DELETE pedidos_controlados + INSERT historico_exclusoes) em
-        // transacao local. Retorna linhas afetadas pelo DELETE — 0 indica
-        // conflito de concorrencia (outro usuario ja excluiu) e nesse caso
-        // o historico NAO recebe registro falso.
+        // transacao local, com locking otimista. Conflito (outro usuario ja
+        // excluiu ou alterou o pedido) e devolvido como ResultadoExclusao e
+        // nesse caso o historico NAO recebe registro falso.
         // =====================================================================
 
         /// <summary>
@@ -605,11 +615,15 @@ namespace CONTROLE_DE_PEDIDOS
 
         /// <summary>
         /// Executa DELETE do pedido em pedidos_controlados e INSERT no historico
-        /// atomicamente numa transacao. Retorna linhas afetadas pelo DELETE.
-        /// Se DELETE retornar 0 (conflito de concorrencia), o INSERT e pulado —
-        /// historico nao recebe registro falso.
+        /// atomicamente numa transacao, com locking otimista: o DELETE só acontece se a
+        /// linha ainda tiver o estado que a tela mostrava (flags de status + rota) — o
+        /// mesmo padrão dos UPDATEs. Antes, um pedido que outro operador travou ou pôs em
+        /// faturamento entre o último refresh e o clique era apagado mesmo assim.
+        /// Em conflito o INSERT é pulado (histórico não recebe registro falso) e o retorno
+        /// diz se a linha sumiu (<see cref="ResultadoExclusao.JaExcluido"/>) ou mudou
+        /// (<see cref="ResultadoExclusao.Alterado"/>).
         /// </summary>
-        public async Task<int> ExcluirPedidoComHistoricoAsync(ExclusaoRegistro reg)
+        public async Task<ResultadoExclusao> ExcluirPedidoComHistoricoAsync(ExclusaoRegistro reg)
         {
             if (!ControleConectado)
                 throw new InvalidOperationException($"Sem conexão com o banco {_config.BancoControle}.");
@@ -619,20 +633,30 @@ namespace CONTROLE_DE_PEDIDOS
             using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
             try
             {
-                // RETURNING: o histórico registra o estado REAL da linha apagada. O `reg`
-                // vem da tela, que pode estar defasada (outro operador avançou/travou o
-                // pedido entre o último refresh e o clique) — a auditoria gravava um
-                // status que o pedido já não tinha. Só o vendedor, pedido_venda e NF-e
+                // WHERE com o estado esperado (locking otimista). RETURNING: o histórico
+                // registra a linha REAL apagada (cliente/nome fantasia podem ter sido
+                // reenriquecidos depois do refresh da tela). Vendedor, pedido_venda e NF-e
                 // (que não existem nesta tabela) continuam vindo do `reg`.
                 int linhas = 0;
                 using (var cmdDel = conn.CreateCommand())
                 {
                     cmdDel.Transaction = tx;
                     cmdDel.CommandText = @"
-                        DELETE FROM pedidos_controlados WHERE orcamento = @orc
+                        DELETE FROM pedidos_controlados
+                         WHERE orcamento = @orc
+                           AND rota = @rota
+                           AND aprovado = @apr AND em_separacao = @sep AND conferido = @cnf
+                           AND liberado = @lib AND travado = @trv AND em_faturamento = @fat
                         RETURNING cliente, nome_fantasia, rota,
                                   aprovado, em_separacao, conferido, liberado, travado, em_faturamento";
                     cmdDel.Parameters.AddWithValue("orc", reg.Orcamento);
+                    cmdDel.Parameters.AddWithValue("rota", reg.Rota ?? "");
+                    cmdDel.Parameters.AddWithValue("apr", reg.Aprovado);
+                    cmdDel.Parameters.AddWithValue("sep", reg.EmSeparacao);
+                    cmdDel.Parameters.AddWithValue("cnf", reg.Conferido);
+                    cmdDel.Parameters.AddWithValue("lib", reg.Liberado);
+                    cmdDel.Parameters.AddWithValue("trv", reg.Travado);
+                    cmdDel.Parameters.AddWithValue("fat", reg.EmFaturamento);
                     using var rd = await cmdDel.ExecuteReaderAsync().ConfigureAwait(false);
                     if (await rd.ReadAsync().ConfigureAwait(false))
                     {
@@ -658,9 +682,24 @@ namespace CONTROLE_DE_PEDIDOS
                     }
                 }
 
-                if (linhas > 0)
+                if (linhas == 0)
                 {
-                    using var cmdIns = conn.CreateCommand();
+                    // Nada apagado: a linha sumiu ou mudou de estado? Lido na mesma
+                    // transação só para dar a mensagem certa ao operador.
+                    bool existe;
+                    using (var cmdExiste = conn.CreateCommand())
+                    {
+                        cmdExiste.Transaction = tx;
+                        cmdExiste.CommandText = "SELECT 1 FROM pedidos_controlados WHERE orcamento = @orc";
+                        cmdExiste.Parameters.AddWithValue("orc", reg.Orcamento);
+                        existe = await cmdExiste.ExecuteScalarAsync().ConfigureAwait(false) != null;
+                    }
+                    await tx.RollbackAsync().ConfigureAwait(false);
+                    return existe ? ResultadoExclusao.Alterado : ResultadoExclusao.JaExcluido;
+                }
+
+                using (var cmdIns = conn.CreateCommand())
+                {
                     cmdIns.Transaction = tx;
                     cmdIns.CommandText = @"
                         INSERT INTO historico_exclusoes
@@ -690,11 +729,8 @@ namespace CONTROLE_DE_PEDIDOS
                 }
 
                 await tx.CommitAsync().ConfigureAwait(false);
-
-                if (linhas > 0)
-                    await NotificarMudancaAsync("exclusao").ConfigureAwait(false);
-
-                return linhas;
+                await NotificarMudancaAsync("exclusao").ConfigureAwait(false);
+                return ResultadoExclusao.Excluido;
             }
             catch
             {

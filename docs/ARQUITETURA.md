@@ -42,7 +42,7 @@ Escrita via:
 ## Concorrência multiusuário (10+ operadores no mesmo RDS)
 
 - **Optimistic locking em todo UPDATE**: o `WHERE` inclui todas as flags do estado esperado (`aprovado=@aprov AND em_separacao=@em_sep AND conferido=@conf AND liberado=@lib`, mais `travado=FALSE AND em_faturamento=FALSE`). Rowcount 0 = outro operador mexeu → MessageBox "Conflito de Concorrência" + reload. Nunca há lock de banco.
-- **Exclusão atômica**: transação `DELETE pedidos_controlados` + `INSERT historico_exclusoes`; o INSERT só ocorre se o DELETE afetou linha (evita auditoria falsa em conflito).
+- **Exclusão atômica e com locking otimista**: transação `DELETE pedidos_controlados ... RETURNING` + `INSERT historico_exclusoes`. O `DELETE` também leva o estado esperado no `WHERE` (as 6 flags + `rota`); rowcount 0 é classificado por um `SELECT` na mesma transação em `ResultadoExclusao.JaExcluido` (linha sumiu) ou `Alterado` (linha existe com outro estado), cada um com sua mensagem no Form1 e no resumo da Exclusão em Massa. O INSERT só ocorre se o DELETE afetou linha (evita auditoria falsa em conflito); sucesso notifica `exclusao`.
 - **`em_faturamento` é um booleano anônimo** — não há coluna de operador; "o operador responsável deve largá-lo" é convenção social, não enforcement.
 
 ## Refresh em tempo quase real

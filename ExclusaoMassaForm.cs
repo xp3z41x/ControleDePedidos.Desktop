@@ -646,7 +646,8 @@ namespace CONTROLE_DE_PEDIDOS
             try
             {
                 int excluidos = 0;
-                int conflitos = 0;
+                int jaExcluidos = 0;
+                int alterados = 0;
                 int erros = 0;
                 string? primeiroErro = null;
 
@@ -679,12 +680,12 @@ namespace CONTROLE_DE_PEDIDOS
                             EmFaturamento: pedido.EmFaturamento,
                             TipoExclusao: ExclusaoRegistro.TipoMassa);
 
-                        var linhas = await _db.ExcluirPedidoComHistoricoAsync(reg);
-
-                        if (linhas > 0)
-                            excluidos++;
-                        else
-                            conflitos++;
+                        switch (await _db.ExcluirPedidoComHistoricoAsync(reg))
+                        {
+                            case ResultadoExclusao.Excluido: excluidos++; break;
+                            case ResultadoExclusao.JaExcluido: jaExcluidos++; break;
+                            default: alterados++; break;
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -697,14 +698,16 @@ namespace CONTROLE_DE_PEDIDOS
                 _alterou = excluidos > 0;
 
                 var mensagem = $"Exclusão concluída:\n\n• {excluidos} pedido{(excluidos != 1 ? "s" : "")} excluído{(excluidos != 1 ? "s" : "")} com sucesso.";
-                if (conflitos > 0)
-                    mensagem += $"\n• {conflitos} pedido{(conflitos != 1 ? "s" : "")} já {(conflitos != 1 ? "haviam" : "havia")} sido excluído{(conflitos != 1 ? "s" : "")} por outro usuário.";
+                if (jaExcluidos > 0)
+                    mensagem += $"\n• {jaExcluidos} pedido{(jaExcluidos != 1 ? "s" : "")} já {(jaExcluidos != 1 ? "haviam" : "havia")} sido excluído{(jaExcluidos != 1 ? "s" : "")} por outro usuário.";
+                if (alterados > 0)
+                    mensagem += $"\n• {alterados} pedido{(alterados != 1 ? "s" : "")} NÃO {(alterados != 1 ? "foram excluídos" : "foi excluído")}: {(alterados != 1 ? "foram alterados" : "foi alterado")} por outro usuário (confira o novo estado na lista).";
                 if (erros > 0)
                     mensagem += $"\n• {erros} pedido{(erros != 1 ? "s" : "")} com erro ao excluir.\n  Primeiro erro: {primeiroErro}";
 
                 var icone = erros > 0
                     ? MessageBoxIcon.Error
-                    : (conflitos > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+                    : (jaExcluidos + alterados > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
                 MessageBox.Show(this, mensagem, "Resultado", MessageBoxButtons.OK, icone);
 
                 await CarregarAsync();
