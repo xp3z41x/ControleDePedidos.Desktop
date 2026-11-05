@@ -56,10 +56,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         /// <summary>
         /// Loga e avisa o operador. Antes só logava: a ação simplesmente "não acontecia"
-        /// e ninguém sabia por quê. Anti-spam: no máximo uma caixa aberta por vez (as
-        /// exceções que chegarem enquanto ela está aberta — o loop de mensagens continua
-        /// rodando atrás do MessageBox — só vão para o log) e a mesma exceção em rajada
-        /// (ex.: falha num Paint/timer) não reabre a caixa.
+        /// e ninguém sabia por quê. Anti-spam: no máximo uma caixa aberta (ou agendada)
+        /// por vez — as exceções que chegarem nesse meio-tempo só vão para o log — e a
+        /// mesma exceção em rajada (ex.: falha num Paint/timer) não reabre a caixa.
         /// </summary>
         private static void TratarExcecaoUi(Exception ex)
         {
@@ -83,6 +82,21 @@ namespace CONTROLE_DE_PEDIDOS
                 "envie o arquivo de log:\n" + CaminhoLog;
 
             _caixaErroAberta = true;
+            // A caixa NÃO pode abrir dentro deste handler: o WinForms descarta (sem chamar
+            // o handler, logo sem log) toda exceção que ocorre enquanto o ThreadException
+            // ainda está em execução — e o loop modal do MessageBox continua rodando
+            // timers/eventos. Verificado com harness: um erro lançado com a caixa aberta
+            // sumia por completo. Postando, o handler retorna na hora e as próximas
+            // exceções chegam aqui (e vão para o log) enquanto a caixa está aberta.
+            var contexto = SynchronizationContext.Current;
+            if (contexto != null)
+                contexto.Post(_ => MostrarCaixaErro(mensagem), null);
+            else
+                MostrarCaixaErro(mensagem);
+        }
+
+        private static void MostrarCaixaErro(string mensagem)
+        {
             try
             {
                 var owner = OwnerSeguro();
