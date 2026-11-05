@@ -742,25 +742,56 @@ namespace CONTROLE_DE_PEDIDOS
             }
         }
 
+        /// <summary>
+        /// DDL idempotente. Aguardado ANTES da primeira carga: disparado em paralelo, num
+        /// banco de controle recém-criado a carga corria contra o CREATE TABLE, falhava
+        /// ("relation does not exist") e os grids ficavam vazios até o próximo timer.
+        /// </summary>
+        private async Task GarantirTabelasSeguroAsync()
+        {
+            try
+            {
+                await _db.GarantirTabelasAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao garantir tabelas do banco de controle", ex);
+            }
+        }
+
         private async void Db_StatusAlterado(object? sender, StatusConexaoEventArgs e)
         {
+            if (IsDisposed) return;
             if (this.InvokeRequired)
             {
                 this.BeginInvoke(() => Db_StatusAlterado(sender, e));
                 return;
             }
-            
+
+            try
+            {
+                await AplicarStatusConexaoAsync(e);
+            }
+            catch (Exception ex)
+            {
+                // async void: exceção aqui derrubaria o app pelo handler global
+                Logger.Error("Erro ao processar mudança de status da conexão", ex);
+            }
+        }
+
+        private async Task AplicarStatusConexaoAsync(StatusConexaoEventArgs e)
+        {
             if (e.StatusIntegra == StatusConexao.Conectado && e.StatusControle == StatusConexao.Conectado && !_dadosIniciaisCarregados)
             {
                 _dadosIniciaisCarregados = true;
-                _ = _db.GarantirTabelasAsync();
+                await GarantirTabelasSeguroAsync();
                 await RecarregarDadosAsync();
                 AgendarProximoRefresh();
                 _db.IniciarEscutaMudancas();   // ações de outros operadores chegam em ~1s
             }
             else if (e.StatusControle == StatusConexao.Conectado && _dadosIniciaisCarregados)
             {
-                _ = _db.GarantirTabelasAsync();
+                await GarantirTabelasSeguroAsync();
                 await RecarregarDadosAsync(recarregarOrcamentos: false);
             }
 
@@ -1960,6 +1991,12 @@ namespace CONTROLE_DE_PEDIDOS
         {
             // SystemEvents é estático: sem desanexar, o form vaza
             Microsoft.Win32.SystemEvents.SessionSwitch -= SessionSwitchHandler;
+            // O DatabaseService é singleton e sobrevive ao form: sem desanexar, um evento
+            // de status/notificação posterior entraria num form já destruído.
+            _db.StatusAlterado -= Db_StatusAlterado;
+            _db.MudancaNotificada -= Db_MudancaNotificada;
+            timerAutoRefresh.Stop();
+            timerCoalescer.Stop();
             _db.Dispose();
             base.OnFormClosed(e);
         }
