@@ -35,12 +35,25 @@ Todos herdam de `System.Drawing.Printing.PrintDocument`, desenham via GDI+ em un
 
 - Preview maximizado com o **botão nativo de impressão substituído** por "Imprimir..." que abre `PrintDialog` (o nativo imprimia direto na impressora pré-selecionada, sem feedback — se a fila estivesse travada, "nada acontecia").
 - Após o OK do PrintDialog, `reaplicarPageSettings()` **deve** re-forçar `PaperSize` A4 + `Landscape` + `Margins` — o PrintDialog reescreve `DefaultPageSettings`.
+- Após o reaplicar, o preview é **regerado** (`PrintPreviewControl.InvalidatePreview()`) para mostrar a geometria da impressora escolhida — é um job novo de preview, com `GeometriaPagina.Medir` de novo no `OnBeginPrint`. A chamada fica no `finally`, **depois** do job real, de propósito: invalidar antes deixaria um job de preview pendente (via `BeginInvoke`) que qualquer bombeamento de mensagens durante a impressão real (diálogo de driver no `StartDoc`) rodaria no MESMO `PrintDocument` no meio do job real, zerando o estado de paginação.
 - Aviso quando a impressora não declara suporte a A4 (`ImpressoraSuportaA4`).
 - **O `owner` importa**: o preview faz `ShowDialog(owner)`. Chamado de dentro de um diálogo modal (ex.: Imprimir por Orçamento), o owner deve ser o diálogo, nunca o Form1 — senão o preview nasce mal-parentado.
 
 **Toda impressão real passa por `PrintingHelper.ImprimirDocumento(owner, doc, ctx)`** — nunca `doc.Print()` direto. Motivo (bug "Print to PDF perde o foco"): o controller padrão `PrintControllerWithStatusDialog` mostra o "Imprimindo página X" numa thread separada sem owner, que rouba a ativação; impressoras com porta `PORTPROMPT:` (Microsoft Print to PDF / XPS Writer) abrem o "Salvar como" dentro do `StartDoc` usando a janela em primeiro plano como owner — que acabava sendo outro app (ex.: navegador). Fechar esse app travava o preview. O helper: (1) para porta `PORTPROMPT:` (via `GetPrinter` nível 2) abre o **nosso** `SaveFileDialog` com o owner certo e passa o caminho por `PrintToFile`/`PrintFileName` (driver grava sem prompt; `PrintAction` segue `PrintToFile` = impressão real); (2) usa `StandardPrintController` (sem thread de status); (3) restaura `PrintToFile`/`PrintFileName`/controller e reativa o owner no `finally`.
 
-`PrintingHelper.AplicarConfigA4(doc, landscape)` seleciona a primeira impressora A4-capaz (evitando térmicas/etiquetadoras pela heurística `PalavrasTermicas`), re-aplica A4 + margens 40. A Separação sobrescreve para 25 depois (densidade de itens é objetivo lá; na Cópia, visual de documento de cliente pede as 40).
+### Seleção de impressora (`AplicarConfigA4` / `EncontrarImpressoraA4Capaz`)
+
+`PrintingHelper.AplicarConfigA4(doc, landscape)` seleciona a impressora e re-aplica A4 + margens 40. A Separação sobrescreve para 25 depois (densidade de itens é objetivo lá; na Cópia, visual de documento de cliente pede as 40).
+
+Ordem de escolha (núcleo puro `EscolherImpressoraA4`, testável sem impressoras reais):
+
+1. **A impressora padrão do Windows do usuário**, se declara A4 e não parece térmica. No RDS todas as 16 impressoras de rede aparecem para todo operador; a padrão é a da mesa dele.
+2. Senão, a primeira instalada que declara A4 e não parece térmica (comportamento antigo — era a COL-A4 de outra loja para todo mundo).
+3. Senão, a primeira A4 com cara de térmica (último recurso); senão `null` (fica a padrão do Windows, com `Warn`).
+
+"Parece térmica" = heurística de nome `PalavrasTermicas` (inclui a convenção do RDS: `FISCAL`, `ETQ`, `ETIQUETADORA`; drivers genéricos de bobina às vezes declaram A4). A escolha e o motivo vão para o log: `Impressora A4: 'X' — <motivo>`.
+
+**Cache por processo:** suporte a A4 por nome de impressora (`ConcurrentDictionary`) + a escolha final chaveada pela padrão (sob lock). Primeira consulta ~80 ms, seguintes ~0 (antes: PaperSizes das 16 impressoras de rede a cada relatório, ~0,9 s). Invalidação: padrão do Windows mudou, escolhida sumiu da lista instalada (sessão RDS reconectada), ou `InvalidarCacheImpressoras()`. Consultas que **falham** nunca entram no cache e impedem cachear a escolha daquela rodada (a próxima tenta de novo).
 
 ## Primitivas compartilhadas (`PrintingHelper.RelatorioTabela`)
 
@@ -96,4 +109,5 @@ Um único método `LayoutPagina(g, area, EstadoPaginacao, pagina, bool medir)` *
 2. **Ramo REAL sem papel:** no PrintDialog, marcar *Imprimir em arquivo* (ou usar "Microsoft Print to PDF") — exercita `StandardPrintController` + translate. **Não** usar Print to PDF para validar geometria de corte (hard margin 0 = correção vira no-op); para isso, imprimir em arquivo `.prn` numa impressora física instalada.
 3. Conferir no log as duas linhas `LogarPagina` (PREVIEW e REAL): `area` idêntica e `DENTRO_DA_AREA_IMPRIMIVEL=True` nos dois.
 4. Contagem de páginas deve bater entre preview e real (o Warn "simulação previu X, renderizou Y" indica bug).
-5. Existe um harness de referência (console app que compila os fontes de impressão, renderiza cenários sintéticos nos dois modos, compara contagens e exporta PNGs das páginas) — o padrão está descrito em `CLAUDE.md`, seção Verificação.
+5. Seleção de impressora: chamar `EscolherImpressoraA4(padrao, instaladas, suportaA4)` com padrões/consultas simuladas (padrão térmica, padrão sem A4, consulta falhando) — **nunca** trocar a impressora padrão do sistema para testar.
+6. Existe um harness de referência (console app que compila os fontes de impressão, renderiza cenários sintéticos nos dois modos, compara contagens e exporta PNGs das páginas) — o padrão está descrito em `CLAUDE.md`, seção Verificação.
