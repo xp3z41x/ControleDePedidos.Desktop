@@ -6,7 +6,7 @@ namespace CONTROLE_DE_PEDIDOS
     /// Tela de consulta ao historico de exclusoes (tabela append-only).
     /// Oferece filtro textual universal e acao de limpeza de registros antigos (> 3 meses).
     /// </summary>
-    public class HistoricoExclusoesForm : Form
+    public class HistoricoExclusoesForm : FormEscalavel
     {
         private readonly DatabaseService _db = DatabaseService.Instancia;
         private OptimizedDataGridView dgvHistorico = null!;
@@ -33,8 +33,8 @@ namespace CONTROLE_DE_PEDIDOS
             SuspendLayout();
 
             Text = "Histórico de Exclusões";
-            ClientSize = new Size(1100, 640);
-            MinimumSize = new Size(800, 450);
+            ClientSize = Dpi(1100, 640);
+            MinimumSize = Dpi(800, 450);
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             MinimizeBox = false;
@@ -46,8 +46,8 @@ namespace CONTROLE_DE_PEDIDOS
 
             var panelCard = new Panel
             {
-                Location = new Point(16, 16),
-                Size = new Size(ClientSize.Width - 32, ClientSize.Height - 32),
+                Location = DpiPt(16, 16),
+                Size = new Size(ClientSize.Width - Dpi(32), ClientSize.Height - Dpi(32)),
                 BackColor = Theme.BgPanel,
                 Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right
             };
@@ -63,7 +63,7 @@ namespace CONTROLE_DE_PEDIDOS
             var panelHeader = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 48,
+                Height = Dpi(48),
                 BackColor = Theme.BgCard
             };
 
@@ -73,7 +73,7 @@ namespace CONTROLE_DE_PEDIDOS
                 Font = Theme.FontTitle,
                 ForeColor = Theme.TextPrimary,
                 AutoSize = true,
-                Location = new Point(16, 14)
+                Location = DpiPt(16, 14)
             };
 
             lblContagem = new Label
@@ -88,9 +88,9 @@ namespace CONTROLE_DE_PEDIDOS
             panelHeader.Controls.Add(lblContagem);
             panelHeader.Resize += (_, _) =>
             {
-                lblTitulo.Location = new Point(16, (panelHeader.Height - lblTitulo.Height) / 2);
+                lblTitulo.Location = new Point(Dpi(16), (panelHeader.Height - lblTitulo.Height) / 2);
                 lblContagem.Location = new Point(
-                    panelHeader.Width - lblContagem.Width - 16,
+                    panelHeader.Width - lblContagem.Width - Dpi(16),
                     (panelHeader.Height - lblContagem.Height) / 2);
             };
             lblContagem.TextChanged += (_, _) =>
@@ -98,7 +98,7 @@ namespace CONTROLE_DE_PEDIDOS
                 BeginInvoke(() =>
                 {
                     lblContagem.Location = new Point(
-                        panelHeader.Width - lblContagem.Width - 16,
+                        panelHeader.Width - lblContagem.Width - Dpi(16),
                         (panelHeader.Height - lblContagem.Height) / 2);
                 });
             };
@@ -116,9 +116,9 @@ namespace CONTROLE_DE_PEDIDOS
             var panelFiltros = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 52,
+                Height = Dpi(52),
                 BackColor = Theme.BgCard,
-                Padding = new Padding(12, 10, 12, 10)
+                Padding = Dpi(12, 10, 12, 10)
             };
             panelFiltros.Paint += (_, e) =>
             {
@@ -142,9 +142,9 @@ namespace CONTROLE_DE_PEDIDOS
             var panelAcoes = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 52,
+                Height = Dpi(52),
                 BackColor = Theme.BgCard,
-                Padding = new Padding(12, 10, 12, 10)
+                Padding = Dpi(12, 10, 12, 10)
             };
             panelAcoes.Paint += (_, e) =>
             {
@@ -155,7 +155,7 @@ namespace CONTROLE_DE_PEDIDOS
             btnLimparAntigos = new Button
             {
                 Text = "Excluir histórico com mais de 3 meses",
-                Size = new Size(260, 30)
+                Size = Dpi(260, 30)
             };
             Theme.EstilizarBotao(btnLimparAntigos);
             btnLimparAntigos.ForeColor = Theme.Error;
@@ -165,7 +165,7 @@ namespace CONTROLE_DE_PEDIDOS
             panelAcoes.Resize += (_, _) =>
             {
                 btnLimparAntigos.Location = new Point(
-                    panelAcoes.Width - btnLimparAntigos.Width - 16,
+                    panelAcoes.Width - btnLimparAntigos.Width - Dpi(16),
                     (panelAcoes.Height - btnLimparAntigos.Height) / 2);
             };
 
@@ -199,32 +199,32 @@ namespace CONTROLE_DE_PEDIDOS
                     Name = "colData",
                     HeaderText = "DATA",
                     DataPropertyName = "DataExclusaoTexto",
-                    Width = 120,
-                    MinimumWidth = 90
+                    Width = Dpi(120),
+                    MinimumWidth = Dpi(90)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colTipo",
                     HeaderText = "TIPO",
                     DataPropertyName = "TipoExclusao",
-                    Width = 70,
-                    MinimumWidth = 55
+                    Width = Dpi(70),
+                    MinimumWidth = Dpi(55)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colOrcamento",
                     HeaderText = "ORÇAMENTO",
                     DataPropertyName = "Orcamento",
-                    Width = 95,
-                    MinimumWidth = 75
+                    Width = Dpi(95),
+                    MinimumWidth = Dpi(75)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colStatus",
                     HeaderText = "STATUS",
                     DataPropertyName = "Status",
-                    Width = 130,
-                    MinimumWidth = 90
+                    Width = Dpi(130),
+                    MinimumWidth = Dpi(90)
                 },
                 new DataGridViewTextBoxColumn
                 {
@@ -232,55 +232,55 @@ namespace CONTROLE_DE_PEDIDOS
                     HeaderText = "CLIENTE",
                     DataPropertyName = "Cliente",
                     AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
-                    MinimumWidth = 140
+                    MinimumWidth = Dpi(140)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colNomeFantasia",
                     HeaderText = "FANTASIA",
                     DataPropertyName = "NomeFantasia",
-                    Width = 200,
-                    MinimumWidth = 110
+                    Width = Dpi(200),
+                    MinimumWidth = Dpi(110)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colRota",
                     HeaderText = "ROTA",
                     DataPropertyName = "Rota",
-                    Width = 100,
-                    MinimumWidth = 70
+                    Width = Dpi(100),
+                    MinimumWidth = Dpi(70)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colVendedor",
                     HeaderText = "VENDEDOR",
                     DataPropertyName = "Vendedor",
-                    Width = 120,
-                    MinimumWidth = 85
+                    Width = Dpi(120),
+                    MinimumWidth = Dpi(85)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colPedidoVenda",
                     HeaderText = "PED. VENDA",
                     DataPropertyName = "PedidoVendaTexto",
-                    Width = 95,
-                    MinimumWidth = 75
+                    Width = Dpi(95),
+                    MinimumWidth = Dpi(75)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colNotaFiscal",
                     HeaderText = "NFE",
                     DataPropertyName = "NotaFiscal",
-                    Width = 90,
-                    MinimumWidth = 70
+                    Width = Dpi(90),
+                    MinimumWidth = Dpi(70)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colUsuario",
                     HeaderText = "USUÁRIO",
                     DataPropertyName = "UsuarioWindows",
-                    Width = 120,
-                    MinimumWidth = 85
+                    Width = Dpi(120),
+                    MinimumWidth = Dpi(85)
                 }
             );
 

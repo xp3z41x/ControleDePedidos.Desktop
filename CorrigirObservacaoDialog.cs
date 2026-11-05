@@ -1,6 +1,6 @@
 namespace CONTROLE_DE_PEDIDOS
 {
-    public class CorrigirObservacaoDialog : Form
+    public class CorrigirObservacaoDialog : FormEscalavel
     {
         private readonly DatabaseService _db = DatabaseService.Instancia;
 
@@ -27,20 +27,20 @@ namespace CONTROLE_DE_PEDIDOS
             BackColor = Theme.BgDark;
             ForeColor = Theme.TextPrimary;
             Font = Theme.FontRegular;
-            ClientSize = new Size(380, 240);
+            ClientSize = Dpi(380, 240);
 
             var lblPedido = new Label
             {
                 Text = "Pedido (estmov.pedido):",
-                Location = new Point(16, 16),
+                Location = DpiPt(16, 16),
                 AutoSize = true,
                 ForeColor = Theme.TextPrimary
             };
 
             txtPedido = new TextBox
             {
-                Location = new Point(16, 40),
-                Size = new Size(348, 26),
+                Location = DpiPt(16, 40),
+                Size = Dpi(348, 26),
                 Font = Theme.FontRegular,
                 MaxLength = 9
             };
@@ -50,15 +50,15 @@ namespace CONTROLE_DE_PEDIDOS
             var lblObservacao = new Label
             {
                 Text = "Nova Observação (estmov.observacao):",
-                Location = new Point(16, 78),
+                Location = DpiPt(16, 78),
                 AutoSize = true,
                 ForeColor = Theme.TextPrimary
             };
 
             txtObservacao = new TextBox
             {
-                Location = new Point(16, 102),
-                Size = new Size(348, 26),
+                Location = DpiPt(16, 102),
+                Size = Dpi(348, 26),
                 Font = Theme.FontRegular,
                 MaxLength = 9
             };
@@ -68,7 +68,7 @@ namespace CONTROLE_DE_PEDIDOS
             var lblFilial = new Label
             {
                 Text = $"Filial Fiscal alvo: {_db.Config.FilialFiscal}",
-                Location = new Point(16, 140),
+                Location = DpiPt(16, 140),
                 AutoSize = true,
                 ForeColor = Theme.TextMuted,
                 Font = Theme.FontSmall
@@ -77,7 +77,7 @@ namespace CONTROLE_DE_PEDIDOS
             var lblAviso = new Label
             {
                 Text = "Sobrescreve qualquer valor existente.",
-                Location = new Point(16, 160),
+                Location = DpiPt(16, 160),
                 AutoSize = true,
                 ForeColor = Theme.TextMuted,
                 Font = Theme.FontSmall
@@ -86,8 +86,8 @@ namespace CONTROLE_DE_PEDIDOS
             btnCancelar = new Button
             {
                 Text = "Cancelar",
-                Size = new Size(90, 32),
-                Location = new Point(274, 192),
+                Size = Dpi(90, 32),
+                Location = DpiPt(274, 192),
                 DialogResult = DialogResult.Cancel
             };
             Theme.EstilizarBotao(btnCancelar);
@@ -95,8 +95,8 @@ namespace CONTROLE_DE_PEDIDOS
             btnGravar = new Button
             {
                 Text = "Gravar",
-                Size = new Size(90, 32),
-                Location = new Point(176, 192)
+                Size = Dpi(90, 32),
+                Location = DpiPt(176, 192)
             };
             Theme.EstilizarBotao(btnGravar, primario: true);
             btnGravar.Click += BtnGravar_Click;
