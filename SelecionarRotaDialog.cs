@@ -3,6 +3,7 @@ namespace CONTROLE_DE_PEDIDOS
     public class SelecionarRotaDialog : Form
     {
         private ComboBox cmbRota = null!;
+        private Label lblDica = null!;
         private Button btnOk = null!;
         private Button btnCancelar = null!;
 
@@ -26,7 +27,7 @@ namespace CONTROLE_DE_PEDIDOS
             BackColor = Theme.BgDark;
             ForeColor = Theme.TextPrimary;
             Font = Theme.FontRegular;
-            ClientSize = new Size(350, 140);
+            ClientSize = new Size(350, 160);
 
             var lblRota = new Label
             {
@@ -48,11 +49,22 @@ namespace CONTROLE_DE_PEDIDOS
                 DisplayMember = "Nome"
             };
 
+            // Dica de estado (carregando / sem rotas / erro): sem ela, o cadastro vazio
+            // mostrava só uma lista muda e o Confirmar devolvia "Selecione uma rota.".
+            lblDica = new Label
+            {
+                Text = "Carregando rotas…",
+                Location = new Point(16, 78),
+                Size = new Size(318, 28), // cabe 2 linhas (o texto quebra sozinho)
+                ForeColor = Theme.TextMuted,
+                Font = Theme.FontSmall
+            };
+
             btnCancelar = new Button
             {
                 Text = "Cancelar",
                 Size = new Size(90, 32),
-                Location = new Point(244, 88),
+                Location = new Point(244, 108),
                 DialogResult = DialogResult.Cancel
             };
             Theme.EstilizarBotao(btnCancelar);
@@ -61,15 +73,16 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 Text = "Confirmar",
                 Size = new Size(90, 32),
-                Location = new Point(146, 88),
-                DialogResult = DialogResult.OK
+                Location = new Point(146, 108),
+                DialogResult = DialogResult.OK,
+                Enabled = false // habilitado só depois que houver rota para escolher
             };
             Theme.EstilizarBotao(btnOk, primario: true);
 
             AcceptButton = btnOk;
             CancelButton = btnCancelar;
 
-            Controls.AddRange([lblRota, cmbRota, btnOk, btnCancelar]);
+            Controls.AddRange([lblRota, cmbRota, lblDica, btnOk, btnCancelar]);
 
             ResumeLayout(false);
             PerformLayout();
@@ -80,7 +93,11 @@ namespace CONTROLE_DE_PEDIDOS
             try
             {
                 var db = DatabaseService.Instancia;
-                if (!db.ControleConectado) return;
+                if (!db.ControleConectado)
+                {
+                    MostrarDica($"Sem conexão com o banco {db.Config.BancoControle}.", Theme.Error);
+                    return;
+                }
 
                 var lista = await db.ExecutarControleAsync(async conn =>
                 {
@@ -93,13 +110,34 @@ namespace CONTROLE_DE_PEDIDOS
                     return result;
                 });
 
+                if (IsDisposed) return; // diálogo fechado durante a carga
+
+                if (lista is not { Count: > 0 })
+                {
+                    cmbRota.Enabled = false;
+                    MostrarDica("Nenhuma rota cadastrada — cadastre em ROTAS › Cadastro de Rotas.", Theme.Warning);
+                    return;
+                }
+
                 cmbRota.DataSource = lista;
-                if (lista?.Count > 0) cmbRota.SelectedIndex = 0;
+                cmbRota.SelectedIndex = 0;
+                lblDica.Visible = false;
+                btnOk.Enabled = true;
+                cmbRota.Focus();
             }
             catch (Exception ex)
             {
                 Logger.Error("Erro ao carregar rotas", ex);
+                if (!IsDisposed)
+                    MostrarDica($"Erro ao carregar rotas: {ex.Message}", Theme.Error);
             }
+        }
+
+        private void MostrarDica(string texto, Color cor)
+        {
+            lblDica.Text = texto;
+            lblDica.ForeColor = cor;
+            lblDica.Visible = true;
         }
     }
 }
