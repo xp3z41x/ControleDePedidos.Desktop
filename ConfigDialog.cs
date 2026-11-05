@@ -33,12 +33,31 @@ namespace CONTROLE_DE_PEDIDOS
         private const int MargemX = 24;
         private const int MargemTop = 20;
 
+        /// <summary>
+        /// CÓPIA de trabalho da configuração. O dialog nunca altera a instância viva
+        /// (_db.Config): "Testar" aplica os campos aqui e, se o usuário cancelar, o app
+        /// continua com a config original. Quem chama troca a instância via
+        /// DatabaseService.AtualizarConfig(dialog.Config) só no OK.
+        /// </summary>
         public AppConfig Config { get; private set; }
 
         public ConfigDialog(AppConfig config)
         {
-            Config = config;
+            Config = Clonar(config);
             InitializeUI();
+        }
+
+        // Cópia rasa de todas as propriedades públicas graváveis (todas são string/int/bool).
+        // Reflexão em vez de lista manual: chave nova em AppConfig é copiada sem tocar aqui.
+        private static AppConfig Clonar(AppConfig origem)
+        {
+            var copia = new AppConfig();
+            foreach (var prop in typeof(AppConfig).GetProperties())
+            {
+                if (prop.CanRead && prop.CanWrite && prop.GetIndexParameters().Length == 0)
+                    prop.SetValue(copia, prop.GetValue(origem));
+            }
+            return copia;
         }
 
         private void InitializeUI()
@@ -269,6 +288,7 @@ namespace CONTROLE_DE_PEDIDOS
 
             AplicarConfig();
             bool ok = await DatabaseService.Instancia.TestarConexao(Config);
+            if (IsDisposed) return; // dialog fechado durante o teste
 
             lblStatus.ForeColor = ok ? Theme.Success : Theme.Error;
             lblStatus.Text = ok ? "Conexão bem-sucedida!" : "Falha na conexão. Verifique os dados.";
