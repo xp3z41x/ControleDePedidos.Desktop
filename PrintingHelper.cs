@@ -294,22 +294,165 @@ namespace CONTROLE_DE_PEDIDOS
                         if (continuar != DialogResult.Yes) return;
                     }
 
-                    LogarEstado(doc, $"{contextoLog} (confirmado)");
-                    try
-                    {
-                        doc.Print();
-                    }
-                    catch (Exception exImpressao)
-                    {
-                        Logger.Error($"Erro ao imprimir ({contextoLog})", exImpressao);
-                        MessageBox.Show(preview, $"Erro ao imprimir: {exImpressao.Message}", "Erro",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }
+                    ImprimirDocumento(preview, doc, $"{contextoLog} (confirmado)");
                 };
                 barraPreview.Items.Insert(0, btnImprimirPreview);
             }
 
             preview.ShowDialog(owner);
+        }
+
+        /// <summary>
+        /// Executa a impressão REAL de <paramref name="doc"/> (já configurado pelo
+        /// PrintDialog) com <paramref name="owner"/> como dono de toda UI envolvida.
+        ///
+        /// Por que não chamar <c>doc.Print()</c> direto (bug "Print to PDF perde o foco"):
+        ///   1. O controller padrão (PrintControllerWithStatusDialog) abre a janelinha
+        ///      "Imprimindo página X" numa THREAD SEPARADA, sem owner. Ela rouba a ativação
+        ///      do preview; ao sumir, o Windows ativa a próxima janela do Z-order — que pode
+        ///      ser o navegador do usuário.
+        ///   2. Impressoras com porta "PORTPROMPT:" (Microsoft Print to PDF, XPS Writer)
+        ///      abrem o "Salvar como" DENTRO do StartDoc, escolhendo o owner pela janela em
+        ///      primeiro plano naquele instante — que, por (1), já não é a nossa. O diálogo
+        ///      fica pendurado em outro app; fechar esse app deixa o StartDoc (e o preview,
+        ///      cujo laço modal está preso dentro do Click) num estado em que não fecha.
+        ///
+        /// Correção: para portas PORTPROMPT perguntamos NÓS o arquivo (SaveFileDialog com
+        /// owner correto) e passamos via PrintToFile/PrintFileName — o driver grava direto,
+        /// sem prompt. E o job roda com StandardPrintController (sem thread de status).
+        /// PrintToFile continua sendo PrintAction.PrintToFile = impressão real (regra de
+        /// negócio da separação inalterada).
+        /// </summary>
+        /// <returns>true se o job foi enviado; false se cancelado ou com erro.</returns>
+        public static bool ImprimirDocumento(Form owner, PrintDocument doc, string contextoLog)
+        {
+            var ps = doc.PrinterSettings;
+            bool printToFileOriginal = ps.PrintToFile;
+            string printFileNameOriginal = ps.PrintFileName;
+            var controllerOriginal = doc.PrintController;
+            var cursorOriginal = owner.Cursor;
+            try
+            {
+                if (!ps.PrintToFile && PortaPedeArquivo(ps.PrinterName))
+                {
+                    bool xps = ps.PrinterName.Contains("XPS", StringComparison.OrdinalIgnoreCase);
+                    using var salvar = new SaveFileDialog
+                    {
+                        Title = $"Salvar impressão — {ps.PrinterName}",
+                        Filter = xps
+                            ? "Documento XPS (*.oxps;*.xps)|*.oxps;*.xps|Todos os arquivos (*.*)|*.*"
+                            : "Documento PDF (*.pdf)|*.pdf|Todos os arquivos (*.*)|*.*",
+                        DefaultExt = xps ? "oxps" : "pdf",
+                        AddExtension = true,
+                        OverwritePrompt = true,
+                        FileName = NomeArquivoSeguro(doc.DocumentName, contextoLog)
+                    };
+                    if (salvar.ShowDialog(owner) != DialogResult.OK)
+                    {
+                        Logger.Info($"{contextoLog}: salvamento em arquivo cancelado pelo usuário");
+                        return false;
+                    }
+                    ps.PrintToFile = true;
+                    ps.PrintFileName = salvar.FileName;
+                    Logger.Info($"{contextoLog}: porta PORTPROMPT — saída direta em '{salvar.FileName}'");
+                }
+
+                doc.PrintController = new StandardPrintController();
+                LogarEstado(doc, contextoLog);
+                owner.Cursor = Cursors.WaitCursor;
+                doc.Print();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Erro ao imprimir ({contextoLog})", ex);
+                MessageBox.Show(owner, $"Erro ao imprimir: {ex.Message}", "Erro",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+            finally
+            {
+                owner.Cursor = cursorOriginal;
+                // Restaura: senão um próximo "Imprimir em arquivo" reaproveitaria o caminho do PDF.
+                ps.PrintToFile = printToFileOriginal;
+                ps.PrintFileName = printFileNameOriginal;
+                doc.PrintController = controllerOriginal;
+                // Garantia extra: devolve o primeiro plano ao nosso diálogo.
+                if (!owner.IsDisposed) owner.Activate();
+            }
+        }
+
+        private static string NomeArquivoSeguro(string? documentName, string contextoLog)
+        {
+            var nome = string.IsNullOrWhiteSpace(documentName) || documentName == "document"
+                ? contextoLog.Replace(" (confirmado)", "")
+                : documentName;
+            foreach (var c in Path.GetInvalidFileNameChars())
+                nome = nome.Replace(c, '_');
+            return nome.Trim();
+        }
+
+        /// <summary>
+        /// True se a impressora usa a porta "PORTPROMPT:" (o driver pede o nome do
+        /// arquivo no StartDoc). Consulta via GetPrinter nível 2; se falhar, cai na
+        /// heurística pelos nomes das impressoras virtuais nativas do Windows.
+        /// </summary>
+        internal static bool PortaPedeArquivo(string nomeImpressora)
+        {
+            try
+            {
+                var porta = ObterPortaImpressora(nomeImpressora);
+                if (porta != null)
+                    return porta.Equals("PORTPROMPT:", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Falha ao consultar porta da impressora '{nomeImpressora}': {ex.Message}");
+            }
+            return nomeImpressora.Equals("Microsoft Print to PDF", StringComparison.OrdinalIgnoreCase)
+                || nomeImpressora.Equals("Microsoft XPS Document Writer", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string? ObterPortaImpressora(string nomeImpressora)
+        {
+            if (!NativeMethods.OpenPrinter(nomeImpressora, out var hPrinter, IntPtr.Zero))
+                return null;
+            try
+            {
+                NativeMethods.GetPrinter(hPrinter, 2, IntPtr.Zero, 0, out int necessario);
+                if (necessario <= 0) return null;
+                var buffer = System.Runtime.InteropServices.Marshal.AllocHGlobal(necessario);
+                try
+                {
+                    if (!NativeMethods.GetPrinter(hPrinter, 2, buffer, necessario, out _))
+                        return null;
+                    // PRINTER_INFO_2: pServerName, pPrinterName, pShareName, pPortName, ...
+                    var pPortName = System.Runtime.InteropServices.Marshal.ReadIntPtr(buffer, 3 * IntPtr.Size);
+                    return System.Runtime.InteropServices.Marshal.PtrToStringUni(pPortName);
+                }
+                finally
+                {
+                    System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer);
+                }
+            }
+            finally
+            {
+                NativeMethods.ClosePrinter(hPrinter);
+            }
+        }
+
+        private static class NativeMethods
+        {
+            [System.Runtime.InteropServices.DllImport("winspool.drv", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+                EntryPoint = "OpenPrinterW", SetLastError = true)]
+            public static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
+
+            [System.Runtime.InteropServices.DllImport("winspool.drv", CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+                EntryPoint = "GetPrinterW", SetLastError = true)]
+            public static extern bool GetPrinter(IntPtr hPrinter, int level, IntPtr pPrinter, int cbBuf, out int pcbNeeded);
+
+            [System.Runtime.InteropServices.DllImport("winspool.drv", SetLastError = true)]
+            public static extern bool ClosePrinter(IntPtr hPrinter);
         }
 
         /// <summary>

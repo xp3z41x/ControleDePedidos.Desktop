@@ -38,6 +38,8 @@ Todos herdam de `System.Drawing.Printing.PrintDocument`, desenham via GDI+ em un
 - Aviso quando a impressora não declara suporte a A4 (`ImpressoraSuportaA4`).
 - **O `owner` importa**: o preview faz `ShowDialog(owner)`. Chamado de dentro de um diálogo modal (ex.: Imprimir por Orçamento), o owner deve ser o diálogo, nunca o Form1 — senão o preview nasce mal-parentado.
 
+**Toda impressão real passa por `PrintingHelper.ImprimirDocumento(owner, doc, ctx)`** — nunca `doc.Print()` direto. Motivo (bug "Print to PDF perde o foco"): o controller padrão `PrintControllerWithStatusDialog` mostra o "Imprimindo página X" numa thread separada sem owner, que rouba a ativação; impressoras com porta `PORTPROMPT:` (Microsoft Print to PDF / XPS Writer) abrem o "Salvar como" dentro do `StartDoc` usando a janela em primeiro plano como owner — que acabava sendo outro app (ex.: navegador). Fechar esse app travava o preview. O helper: (1) para porta `PORTPROMPT:` (via `GetPrinter` nível 2) abre o **nosso** `SaveFileDialog` com o owner certo e passa o caminho por `PrintToFile`/`PrintFileName` (driver grava sem prompt; `PrintAction` segue `PrintToFile` = impressão real); (2) usa `StandardPrintController` (sem thread de status); (3) restaura `PrintToFile`/`PrintFileName`/controller e reativa o owner no `finally`.
+
 `PrintingHelper.AplicarConfigA4(doc, landscape)` seleciona a primeira impressora A4-capaz (evitando térmicas/etiquetadoras pela heurística `PalavrasTermicas`), re-aplica A4 + margens 40. A Separação sobrescreve para 25 depois (densidade de itens é objetivo lá; na Cópia, visual de documento de cliente pede as 40).
 
 ## Primitivas compartilhadas (`PrintingHelper.RelatorioTabela`)

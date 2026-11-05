@@ -506,17 +506,7 @@ namespace CONTROLE_DE_PEDIDOS
                     if (continuar != DialogResult.Yes) return;
                 }
 
-                PrintingHelper.LogarEstado(doc, "Imprimir Relatório de Carga");
-                try
-                {
-                    doc.Print();
-                }
-                catch (Exception ex)
-                {
-                    Logger.Error("Erro ao imprimir Relatório de Carga", ex);
-                    MessageBox.Show(this, $"Erro ao imprimir: {ex.Message}", "Erro",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                PrintingHelper.ImprimirDocumento(this, doc, "Imprimir Relatório de Carga");
             }
         }
 
