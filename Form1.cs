@@ -571,8 +571,33 @@ namespace CONTROLE_DE_PEDIDOS
             await RecarregarDadosAsync();
         }
 
+        // ==================================================================
+        // EXCLUSÃO MÚTUA DAS AÇÕES DOS BOTÕES
+        // Os handlers são async: um duplo clique (ou clique em outro botão) durante o
+        // await da primeira ação rodava a segunda com o MESMO estado em memória, ainda
+        // não atualizado — o UPDATE com locking otimista não batia e o operador via um
+        // falso "alterado por outro usuário" (ou dois previews de impressão empilhados).
+        // ==================================================================
+        private bool _acaoEmAndamento;
+
+        private sealed class AcaoEmAndamento(Form1 form) : IDisposable
+        {
+            public void Dispose() => form._acaoEmAndamento = false;
+        }
+
+        /// <summary>null = já há uma ação rodando (o clique é ignorado).</summary>
+        private AcaoEmAndamento? TentarIniciarAcao()
+        {
+            if (_acaoEmAndamento) return null;
+            _acaoEmAndamento = true;
+            return new AcaoEmAndamento(this);
+        }
+
         private async void BtnAprovar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvOrcamentos.CurrentRow?.DataBoundItem is not OrcamentoResumo orc) return;
             if (!_db.ControleConectado) return;
 
@@ -661,6 +686,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnIgnorar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvOrcamentos.CurrentRow?.DataBoundItem is not OrcamentoResumo orc) return;
             if (!_db.ControleConectado) return;
 
@@ -774,6 +802,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnAlterarRota_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -822,6 +853,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnExcluirPedido_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -884,6 +918,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnTravar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -933,6 +970,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnDestravar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -982,6 +1022,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnAvancarStatus_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -1063,6 +1106,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnRetornarStatus_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -1145,6 +1191,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnAssumir_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -1204,6 +1253,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnLargar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -1268,6 +1320,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnImprimirSeparacao_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             await ImprimirSeparacaoAsync(pedido.Orcamento, pedido, this);
         }
@@ -1481,6 +1536,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnCopiaPedido_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             await ImprimirCopiaPedidoAsync(pedido.Orcamento, this);
         }
