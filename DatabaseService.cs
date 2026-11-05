@@ -619,13 +619,43 @@ namespace CONTROLE_DE_PEDIDOS
             using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
             try
             {
-                int linhas;
+                // RETURNING: o histórico registra o estado REAL da linha apagada. O `reg`
+                // vem da tela, que pode estar defasada (outro operador avançou/travou o
+                // pedido entre o último refresh e o clique) — a auditoria gravava um
+                // status que o pedido já não tinha. Só o vendedor, pedido_venda e NF-e
+                // (que não existem nesta tabela) continuam vindo do `reg`.
+                int linhas = 0;
                 using (var cmdDel = conn.CreateCommand())
                 {
                     cmdDel.Transaction = tx;
-                    cmdDel.CommandText = "DELETE FROM pedidos_controlados WHERE orcamento = @orc";
+                    cmdDel.CommandText = @"
+                        DELETE FROM pedidos_controlados WHERE orcamento = @orc
+                        RETURNING cliente, nome_fantasia, rota,
+                                  aprovado, em_separacao, conferido, liberado, travado, em_faturamento";
                     cmdDel.Parameters.AddWithValue("orc", reg.Orcamento);
-                    linhas = await cmdDel.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    using var rd = await cmdDel.ExecuteReaderAsync().ConfigureAwait(false);
+                    if (await rd.ReadAsync().ConfigureAwait(false))
+                    {
+                        linhas = 1;   // orcamento é PK: no máximo uma linha
+                        reg = reg with
+                        {
+                            Cliente       = rd.GetString(0),
+                            NomeFantasia  = rd.GetString(1),
+                            Rota          = rd.GetString(2),
+                            Aprovado      = rd.GetBoolean(3),
+                            EmSeparacao   = rd.GetBoolean(4),
+                            Conferido     = rd.GetBoolean(5),
+                            Liberado      = rd.GetBoolean(6),
+                            Travado       = rd.GetBoolean(7),
+                            EmFaturamento = rd.GetBoolean(8),
+                        };
+                        reg = reg with
+                        {
+                            Status = ExclusaoRegistro.CalcularStatus(
+                                reg.Aprovado, reg.EmSeparacao, reg.Conferido,
+                                reg.Liberado, reg.Travado, reg.EmFaturamento, reg.PedidoVenda)
+                        };
+                    }
                 }
 
                 if (linhas > 0)
