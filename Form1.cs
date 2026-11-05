@@ -8,6 +8,10 @@ namespace CONTROLE_DE_PEDIDOS
         private bool _dadosIniciaisCarregados;
         private HashSet<int> _ignorados = [];
         private HashSet<int> _aprovados = [];
+        // Já houve ao menos uma carga bem-sucedida de cada conjunto? Sem isso não há como
+        // filtrar os pendentes (aprovados/ignorados reapareceriam como pendentes).
+        private bool _ignoradosCarregados;
+        private bool _aprovadosCarregados;
         private bool _recarregando;
         /// <summary>Suprime DgvSelectionChanged enquanto o código mexe na seleção (refresh).</summary>
         private bool _suprimirSelectionChanged;
@@ -30,6 +34,7 @@ namespace CONTROLE_DE_PEDIDOS
         public Form1()
         {
             InitializeComponent();
+            _lblTituloDetalhes = LocalizarTituloDetalhes();
             _db = DatabaseService.Instancia;
             _db.StatusAlterado += Db_StatusAlterado;
             _db.MudancaNotificada += Db_MudancaNotificada;
@@ -133,9 +138,14 @@ namespace CONTROLE_DE_PEDIDOS
             else Aplicar();
         }
 
-        private async Task CarregarIgnoradosAsync()
+        /// <summary>
+        /// Recarrega o conjunto de ignorados. Retorna false se ele não pôde ser atualizado
+        /// (controle fora ou erro): nesse caso o último conjunto conhecido é MANTIDO — zerar
+        /// fazia todos os ignorados reaparecerem como pendentes no grid de orçamentos.
+        /// </summary>
+        private async Task<bool> CarregarIgnoradosAsync()
         {
-            if (!_db.ControleConectado) return;
+            if (!_db.ControleConectado) return false;
 
             try
             {
@@ -151,20 +161,35 @@ namespace CONTROLE_DE_PEDIDOS
                 });
 
                 _ignorados = lista ?? [];
+                _ignoradosCarregados = true;
+                return true;
             }
             catch (Exception ex)
             {
-                Logger.Error("Erro ao carregar orçamentos ignorados", ex);
-                _ignorados = [];
+                Logger.Error("Erro ao carregar orçamentos ignorados (mantido o último conjunto conhecido)", ex);
+                return false;
             }
         }
 
         private async Task CarregarOrcamentosAsync()
         {
-            if (!_db.IntegraConectado) return;
+            if (!_db.IntegraConectado)
+            {
+                if (_dadosIniciaisCarregados) IndicarDesatualizado(lblContagem, true);
+                return;
+            }
 
-            await CarregarIgnoradosAsync();
-            await CarregarAprovadosAsync();
+            bool ignoradosOk = await CarregarIgnoradosAsync();
+            bool aprovadosOk = await CarregarAprovadosAsync();
+            // Conjuntos auxiliares velhos ainda filtram bem (com o controle fora ninguém
+            // aprova/ignora), mas o grid pode divergir do banco: marca como desatualizado.
+            bool auxiliaresOk = ignoradosOk && aprovadosOk;
+            if (!_ignoradosCarregados || !_aprovadosCarregados)
+            {
+                // Nunca carregados: sem filtro confiável, mantém o grid como está.
+                IndicarDesatualizado(lblContagem, true);
+                return;
+            }
 
             // Salvar estado atual para restaurar após reload
             int orcSelecionado = -1;
@@ -215,7 +240,10 @@ namespace CONTROLE_DE_PEDIDOS
                 string assinatura = string.Join("\n", dados.Select(o =>
                     $"{o.Orcamento}\u001F{o.Nome}\u001F{o.NomeFantasia}"));
                 if (assinatura == _assinaturaOrcamentos && dgvOrcamentos.DataSource != null)
+                {
+                    IndicarDesatualizado(lblContagem, !auxiliaresOk);
                     return;
+                }
                 _assinaturaOrcamentos = assinatura;
 
                 // Suprimir repaints intermediários durante a atualização
@@ -269,12 +297,13 @@ namespace CONTROLE_DE_PEDIDOS
                 return;
             }
 
-            IndicarDesatualizado(lblContagem, false);
+            IndicarDesatualizado(lblContagem, !auxiliaresOk);
         }
 
-        private async Task CarregarAprovadosAsync()
+        /// <summary>Mesma semântica de <see cref="CarregarIgnoradosAsync"/>.</summary>
+        private async Task<bool> CarregarAprovadosAsync()
         {
-            if (!_db.ControleConectado) return;
+            if (!_db.ControleConectado) return false;
 
             try
             {
@@ -290,17 +319,23 @@ namespace CONTROLE_DE_PEDIDOS
                 });
 
                 _aprovados = lista ?? [];
+                _aprovadosCarregados = true;
+                return true;
             }
             catch (Exception ex)
             {
-                Logger.Error("Erro ao carregar orçamentos aprovados", ex);
-                _aprovados = [];
+                Logger.Error("Erro ao carregar orçamentos aprovados (mantido o último conjunto conhecido)", ex);
+                return false;
             }
         }
 
         private async Task CarregarPedidosAsync()
         {
-            if (!_db.ControleConectado) return;
+            if (!_db.ControleConectado)
+            {
+                if (_dadosIniciaisCarregados) IndicarDesatualizado(lblContagemPedidos, true);
+                return;
+            }
 
             try
             {
@@ -412,7 +447,11 @@ namespace CONTROLE_DE_PEDIDOS
                 // comparar em memória antes evita pagar isso à toa em ~97% dos refreshes.
                 string assinatura = AssinaturaPedidos(dados);
                 if (assinatura == _assinaturaPedidos && dgvPedidos.DataSource != null)
+                {
+                    // Conteúdo igual ao da tela, mas veio do banco agora: está em dia.
+                    IndicarDesatualizado(lblContagemPedidos, false);
                     return;
+                }
                 _assinaturaPedidos = assinatura;
 
                 // Atualizar master list preservando referências existentes quando possível
@@ -448,8 +487,9 @@ namespace CONTROLE_DE_PEDIDOS
         /// contagem do grid. Idempotente nos dois sentidos; o texto-base é preservado
         /// porque outros caminhos (RemoverOrcamentoDoGrid, AplicarFiltros) o reescrevem.
         /// </summary>
-        private static void IndicarDesatualizado(Label lbl, bool desatualizado)
+        private static void IndicarDesatualizado(Label lbl, bool desatualizado, Color? corNormal = null)
         {
+            Color normal = corNormal ?? Theme.TextMuted;
             string texto = lbl.Text;
             bool marcado = texto.EndsWith(SufixoDesatualizado, StringComparison.Ordinal);
             if (desatualizado)
@@ -458,11 +498,11 @@ namespace CONTROLE_DE_PEDIDOS
                     lbl.Text = (texto.Length > 0 ? texto : "dados") + SufixoDesatualizado;
                 lbl.ForeColor = Theme.Warning;
             }
-            else if (marcado || lbl.ForeColor != Theme.TextMuted)
+            else if (marcado || lbl.ForeColor != normal)
             {
                 if (marcado)
                     lbl.Text = texto[..^SufixoDesatualizado.Length];
-                lbl.ForeColor = Theme.TextMuted;
+                lbl.ForeColor = normal;
             }
         }
 
@@ -533,6 +573,11 @@ namespace CONTROLE_DE_PEDIDOS
                     if (recarregarPedidos) tasks.Add(CarregarPedidosAsync());
 
                     await Task.WhenAll(tasks);
+
+                    // Painel mostrando cache/fallback: tenta de novo a cada ciclo (uma
+                    // query só, e só enquanto estiver desatualizado).
+                    if (_detalheDesatualizado && _orcamentoDetalheAtual != 0 && _db.IntegraConectado)
+                        await CarregarDetalhesAsync(_orcamentoDetalheAtual);
 
                     // Pedidos enfileirados durante esta passada: mais uma rodada.
                     recarregarOrcamentos = _recarregarOrcamentosPendente;
@@ -868,7 +913,13 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 // Parar auto-refresh enquanto o Integra está fora
                 timerAutoRefresh.Stop();
+                // Os pendentes continuam na tela, mas não serão mais atualizados até a
+                // reconexão (que recarrega e limpa o indicativo).
+                if (_dadosIniciaisCarregados) IndicarDesatualizado(lblContagem, true);
+                if (_orcamentoDetalheAtual != 0) MarcarDetalhesDesatualizados(true);
             }
+            if (e.StatusControle == StatusConexao.Desconectado && _dadosIniciaisCarregados)
+                IndicarDesatualizado(lblContagemPedidos, true);
             else if (e.StatusIntegra == StatusConexao.Conectado && _dadosIniciaisCarregados
                      && !timerAutoRefresh.Enabled)
             {
@@ -1853,7 +1904,7 @@ namespace CONTROLE_DE_PEDIDOS
 
             if (orcamento == null) return;
             _gridDetalhe = (DataGridView)sender!;
-            if (orcamento == _orcamentoDetalheAtual) return;
+            if (orcamento == _orcamentoDetalheAtual && !_detalheDesatualizado) return;
             _orcamentoDetalheAtual = orcamento.Value;
             _ = CarregarDetalhesAsync(orcamento.Value);
         }
@@ -1881,14 +1932,94 @@ namespace CONTROLE_DE_PEDIDOS
                 if (_orcamentoDetalheAtual != 0) LimparDetalhes();
                 return;
             }
-            if (orcamento == _orcamentoDetalheAtual) return;
+            if (orcamento == _orcamentoDetalheAtual && !_detalheDesatualizado) return;
             _orcamentoDetalheAtual = orcamento.Value;
             _ = CarregarDetalhesAsync(orcamento.Value);
         }
 
+        /// <summary>
+        /// Últimos detalhes lidos do Integra por orçamento: fallback do painel quando o
+        /// Integra está fora ou a consulta falha. Limitado para não crescer sem fim numa
+        /// sessão RDS que fica aberta por dias.
+        /// </summary>
+        private readonly Dictionary<int, DetalhesOrcamento> _cacheDetalhes = [];
+        private const int CacheDetalhesMax = 2000;
+
+        /// <summary>O painel exibe cache/fallback em vez de dados lidos agora do Integra.</summary>
+        private bool _detalheDesatualizado;
+
+        /// <summary>
+        /// Título do card de detalhes (no Designer é variável local): recebe o mesmo sufixo
+        /// "· desatualizado" dos contadores. Localizado pelo texto para não mexer no
+        /// Designer; se não for achado, o painel só não exibe o indicativo.
+        /// </summary>
+        private readonly Label? _lblTituloDetalhes;
+        private const string TituloDetalhes = "Detalhes do Orçamento";
+
+        private Label? LocalizarTituloDetalhes()
+        {
+            var pendentes = new Stack<Control>();
+            pendentes.Push(panelDetalhes);
+            while (pendentes.Count > 0)
+            {
+                foreach (Control c in pendentes.Pop().Controls)
+                {
+                    if (c is Label l && l.Text == TituloDetalhes) return l;
+                    pendentes.Push(c);
+                }
+            }
+            Logger.Warn("Título do painel de detalhes não encontrado: indicativo de desatualizado desativado.");
+            return null;
+        }
+
+        private void MarcarDetalhesDesatualizados(bool desatualizado)
+        {
+            _detalheDesatualizado = desatualizado;
+            if (_lblTituloDetalhes != null)
+                IndicarDesatualizado(_lblTituloDetalhes, desatualizado, Theme.TextPrimary);
+        }
+
+        private void ExibirDetalhes(DetalhesOrcamento det)
+        {
+            lblDetCidade.Text = string.IsNullOrWhiteSpace(det.Cidade) ? "—" : det.Cidade;
+            lblDetEstado.Text = string.IsNullOrWhiteSpace(det.Estado) ? "—" : det.Estado;
+            lblDetValorTotal.Text = det.ValorTotal.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("pt-BR"));
+            lblDetTexto01.Text = string.IsNullOrWhiteSpace(det.Texto01) ? "—" : det.Texto01;
+            lblDetTexto02.Text = string.IsNullOrWhiteSpace(det.Texto02) ? "—" : det.Texto02;
+            lblDetTexto03.Text = string.IsNullOrWhiteSpace(det.Texto03) ? "—" : $"{det.Texto03} VOLUMES";
+            lblDetTexto04.Text = string.IsNullOrWhiteSpace(det.Texto04) ? "—" : $"{det.Texto04} KG";
+            lblDetObservacao.Text = string.IsNullOrWhiteSpace(det.Observacao) ? "—" : det.Observacao;
+            lblDetVendedor.Text = string.IsNullOrWhiteSpace(det.Vendedor) ? "—" : det.Vendedor;
+        }
+
+        /// <summary>
+        /// Integra fora ou consulta falhou: mostra os últimos detalhes conhecidos do
+        /// orçamento; sem eles, o que o app tem pelo banco de controle (o vendedor do
+        /// último enriquecimento do pedido controlado) e "—" no resto. Nunca deixa no
+        /// painel os dados do orçamento ANTERIOR, e sempre marca o título.
+        /// </summary>
+        private void ExibirDetalhesDisponiveis(int orcamento)
+        {
+            if (_cacheDetalhes.TryGetValue(orcamento, out var cache))
+            {
+                ExibirDetalhes(cache);
+            }
+            else
+            {
+                var controlado = _pedidosTodos.FirstOrDefault(p => p.Orcamento == orcamento);
+                ExibirDetalhes(new DetalhesOrcamento { Vendedor = controlado?.Vendedor ?? "" });
+                lblDetValorTotal.Text = "—";   // valor desconhecido, não R$ 0,00
+            }
+            MarcarDetalhesDesatualizados(true);
+        }
+
         private async Task CarregarDetalhesAsync(int orcamento)
         {
-            if (!_db.IntegraConectado) return;
+            if (!_db.IntegraConectado)
+            {
+                ExibirDetalhesDisponiveis(orcamento);
+                return;
+            }
 
             try
             {
@@ -1927,25 +2058,22 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (det != null)
                 {
-                    lblDetCidade.Text = string.IsNullOrWhiteSpace(det.Cidade) ? "—" : det.Cidade;
-                    lblDetEstado.Text = string.IsNullOrWhiteSpace(det.Estado) ? "—" : det.Estado;
-                    lblDetValorTotal.Text = det.ValorTotal.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("pt-BR"));
-                    lblDetTexto01.Text = string.IsNullOrWhiteSpace(det.Texto01) ? "—" : det.Texto01;
-                    lblDetTexto02.Text = string.IsNullOrWhiteSpace(det.Texto02) ? "—" : det.Texto02;
-                    lblDetTexto03.Text = string.IsNullOrWhiteSpace(det.Texto03) ? "—" : $"{det.Texto03} VOLUMES";
-                    lblDetTexto04.Text = string.IsNullOrWhiteSpace(det.Texto04) ? "—" : $"{det.Texto04} KG";
-                    lblDetObservacao.Text = string.IsNullOrWhiteSpace(det.Observacao) ? "—" : det.Observacao;
-                    lblDetVendedor.Text = string.IsNullOrWhiteSpace(det.Vendedor) ? "—" : det.Vendedor;
+                    if (_cacheDetalhes.Count >= CacheDetalhesMax) _cacheDetalhes.Clear();
+                    _cacheDetalhes[orcamento] = det;
+                    ExibirDetalhes(det);
+                    MarcarDetalhesDesatualizados(false);
                 }
                 else
                 {
+                    _cacheDetalhes.Remove(orcamento);
                     LimparDetalhes();
                 }
             }
             catch (Exception ex)
             {
-                LimparDetalhes();
-                Logger.Warn($"Erro ao carregar detalhes do orçamento {orcamento}", ex);
+                Logger.Warn($"Erro ao carregar detalhes do orçamento {orcamento} (exibindo os últimos conhecidos)", ex);
+                if (_orcamentoDetalheAtual == orcamento)
+                    ExibirDetalhesDisponiveis(orcamento);
             }
         }
 
@@ -1961,6 +2089,7 @@ namespace CONTROLE_DE_PEDIDOS
             lblDetObservacao.Text = "—";
             lblDetVendedor.Text = "—";
             _orcamentoDetalheAtual = 0;
+            MarcarDetalhesDesatualizados(false);
         }
 
         private void MenuCadastroRotas_Click(object? sender, EventArgs e)
@@ -2090,6 +2219,7 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 _assinaturaOrcamentos = "";
                 _assinaturaPedidos = "";
+                _cacheDetalhes.Clear();   // a filial pode ter mudado
                 LimparDetalhes();
                 await RecarregarDadosAsync();
                 if (_db.IntegraConectado) AgendarProximoRefresh();
