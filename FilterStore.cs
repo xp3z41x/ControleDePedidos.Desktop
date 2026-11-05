@@ -31,7 +31,7 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 if (!File.Exists(FilePath)) return;
 
-                var json = File.ReadAllText(FilePath);
+                var json = ArquivoAtomico.LerTexto(FilePath);
                 _data = JsonSerializer.Deserialize<FiltrosPersistidos>(json) ?? new FiltrosPersistidos();
             }
             catch
@@ -73,7 +73,9 @@ namespace CONTROLE_DE_PEDIDOS
                 Directory.CreateDirectory(DirPath);
                 var options = new JsonSerializerOptions { WriteIndented = true };
                 var json = JsonSerializer.Serialize(_data, options);
-                File.WriteAllText(FilePath, json);
+                // Atômico: queda no meio da gravação deixava JSON truncado e o
+                // Carregar descartava todos os filtros salvos.
+                ArquivoAtomico.GravarTexto(FilePath, json);
                 _dirty = false;
             }
             catch
