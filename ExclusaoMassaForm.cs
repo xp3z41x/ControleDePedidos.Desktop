@@ -15,6 +15,7 @@ namespace CONTROLE_DE_PEDIDOS
         private Label lblSelecionados = null!;
         private bool _alterou;
         private bool _excluindo;
+        private bool _alterandoEmLote; // marcação em massa: conta uma vez só, no fim
 
         public ExclusaoMassaForm()
         {
@@ -294,11 +295,18 @@ namespace CONTROLE_DE_PEDIDOS
                 }
             };
 
-            // Click na célula da checkbox — toggle manual
-            dgvPedidos.CellContentClick += (_, e) =>
+            // O CheckBoxCell só grava o valor ao fim da edição, e o CellContentClick não
+            // cobre a barra de espaço: marcar pelo teclado não atualizava "N selecionados".
+            // Commit imediato ao sujar a célula + contagem no CellValueChanged cobre
+            // clique e teclado pelo mesmo caminho.
+            dgvPedidos.CurrentCellDirtyStateChanged += (_, _) =>
             {
-                if (e.RowIndex < 0 || e.ColumnIndex != 0) return;
-                dgvPedidos.EndEdit();
+                if (dgvPedidos.IsCurrentCellDirty && dgvPedidos.CurrentCell?.ColumnIndex == 0)
+                    dgvPedidos.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            };
+            dgvPedidos.CellValueChanged += (_, e) =>
+            {
+                if (_alterandoEmLote || e.RowIndex < 0 || e.ColumnIndex != 0) return;
                 AtualizarContagemSelecionados();
             };
 
@@ -415,10 +423,13 @@ namespace CONTROLE_DE_PEDIDOS
 
         private void AlterarSelecaoTodos(bool selecionar)
         {
-            foreach (DataGridViewRow row in dgvPedidos.Rows)
+            _alterandoEmLote = true;
+            try
             {
-                row.Cells["colSelecionar"].Value = selecionar;
+                foreach (DataGridViewRow row in dgvPedidos.Rows)
+                    row.Cells["colSelecionar"].Value = selecionar;
             }
+            finally { _alterandoEmLote = false; }
             dgvPedidos.EndEdit();
             dgvPedidos.RefreshEdit();
             AtualizarContagemSelecionados();
@@ -426,11 +437,16 @@ namespace CONTROLE_DE_PEDIDOS
 
         private void MarcarFaturados()
         {
-            foreach (DataGridViewRow row in dgvPedidos.Rows)
+            _alterandoEmLote = true;
+            try
             {
-                if (row.DataBoundItem is PedidoExclusao p && p.PedidoVenda > 0)
-                    row.Cells["colSelecionar"].Value = true;
+                foreach (DataGridViewRow row in dgvPedidos.Rows)
+                {
+                    if (row.DataBoundItem is PedidoExclusao p && p.PedidoVenda > 0)
+                        row.Cells["colSelecionar"].Value = true;
+                }
             }
+            finally { _alterandoEmLote = false; }
             dgvPedidos.EndEdit();
             dgvPedidos.RefreshEdit();
             AtualizarContagemSelecionados();
@@ -470,17 +486,22 @@ namespace CONTROLE_DE_PEDIDOS
                 rotasSelecionadas.Where(r => r != SemRotaLabel),
                 StringComparer.CurrentCultureIgnoreCase);
 
-            foreach (DataGridViewRow row in dgvPedidos.Rows)
+            _alterandoEmLote = true;
+            try
             {
-                if (row.DataBoundItem is not PedidoExclusao p) continue;
+                foreach (DataGridViewRow row in dgvPedidos.Rows)
+                {
+                    if (row.DataBoundItem is not PedidoExclusao p) continue;
 
-                bool semRota = string.IsNullOrWhiteSpace(p.Rota);
-                bool match = (semRota && incluirSemRota)
-                          || (!semRota && rotasNormalizadas.Contains(p.Rota.Trim()));
+                    bool semRota = string.IsNullOrWhiteSpace(p.Rota);
+                    bool match = (semRota && incluirSemRota)
+                              || (!semRota && rotasNormalizadas.Contains(p.Rota.Trim()));
 
-                if (match)
-                    row.Cells["colSelecionar"].Value = true;
+                    if (match)
+                        row.Cells["colSelecionar"].Value = true;
+                }
             }
+            finally { _alterandoEmLote = false; }
 
             dgvPedidos.EndEdit();
             AtualizarContagemSelecionados();
