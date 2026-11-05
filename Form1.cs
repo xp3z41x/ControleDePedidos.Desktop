@@ -835,10 +835,12 @@ namespace CONTROLE_DE_PEDIDOS
                 await RecarregarDadosAsync();
             }
 
+            // Os bancos agora são testados de forma independente: só um fora = "Parcial"
+            // (amarelo); vermelho apenas com os dois fora.
             StatusConexao pior;
-            if (e.StatusIntegra == StatusConexao.Desconectado || e.StatusControle == StatusConexao.Desconectado)
+            if (e.StatusIntegra == StatusConexao.Desconectado && e.StatusControle == StatusConexao.Desconectado)
                 pior = StatusConexao.Desconectado;
-            else if (e.StatusIntegra == StatusConexao.Verificando || e.StatusControle == StatusConexao.Verificando)
+            else if (e.StatusIntegra != StatusConexao.Conectado || e.StatusControle != StatusConexao.Conectado)
                 pior = StatusConexao.Verificando;
             else
                 pior = StatusConexao.Conectado;

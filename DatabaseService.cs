@@ -19,6 +19,17 @@ namespace CONTROLE_DE_PEDIDOS
         Alterado
     }
 
+    /// <summary>
+    /// Resultado do botão "Testar" do ConfigDialog, um item por banco. Erro null = OK.
+    /// <paramref name="ControleSeraCriado"/>: o banco de controle ainda não existe, mas o
+    /// servidor responde — o app o cria ao conectar, então não conta como falha.
+    /// </summary>
+    public sealed record ResultadoTesteConexao(string? ErroIntegra, string? ErroControle, bool ControleSeraCriado)
+    {
+        public bool IntegraOk => ErroIntegra == null;
+        public bool ControleOk => ErroControle == null || ControleSeraCriado;
+    }
+
     public class StatusConexaoEventArgs : EventArgs
     {
         public StatusConexao StatusIntegra { get; }
@@ -316,18 +327,21 @@ namespace CONTROLE_DE_PEDIDOS
 
             try
             {
-                bool okIntegra = await TestarConexaoAsync(_config.ConnectionStringIntegra).ConfigureAwait(false);
-                bool okControle = false;
-
-                if (okIntegra)
+                // Os dois bancos são testados de forma INDEPENDENTE (e em paralelo). Antes o
+                // controle só era testado se o Integra respondesse: com o Integra fora o app
+                // inteiro ficava "Desconectado", inclusive as telas que só usam o controle.
+                var tarefaIntegra = TestarConexaoAsync(_config.ConnectionStringIntegra);
+                var tarefaControle = Task.Run(async () =>
                 {
                     // Só marca como garantido se deu certo: antes o true era gravado mesmo
                     // após falha (o catch interno zerava e a linha seguinte sobrescrevia),
                     // e o banco nunca mais era criado até trocar a configuração.
                     if (!_bancoControleGarantido)
                         _bancoControleGarantido = await GarantirBancoControleAsync().ConfigureAwait(false);
-                    okControle = await TestarConexaoAsync(_config.ConnectionStringControle).ConfigureAwait(false);
-                }
+                    return await TestarConexaoAsync(_config.ConnectionStringControle).ConfigureAwait(false);
+                });
+                bool okIntegra = await tarefaIntegra.ConfigureAwait(false);
+                bool okControle = await tarefaControle.ConfigureAwait(false);
 
                 var novoIntegra = okIntegra ? StatusConexao.Conectado : StatusConexao.Desconectado;
                 var novoControle = okControle ? StatusConexao.Conectado : StatusConexao.Desconectado;
@@ -346,6 +360,8 @@ namespace CONTROLE_DE_PEDIDOS
                         mensagem = $"Conectado - {_config.ServidorIP}";
                     else if (okIntegra)
                         mensagem = $"Parcial - {_config.ServidorIP} (sem {_config.BancoControle})";
+                    else if (okControle)
+                        mensagem = $"Parcial - {_config.ServidorIP} (sem {_config.BancoIntegra})";
                     else
                         mensagem = $"Desconectado - {_config.ServidorIP}";
 
@@ -806,19 +822,45 @@ namespace CONTROLE_DE_PEDIDOS
             }).ConfigureAwait(false);
         }
 
-        public async Task<bool> TestarConexao(AppConfig configTeste)
+        /// <summary>
+        /// Botão "Testar" do ConfigDialog: testa os DOIS bancos com a config digitada, sem
+        /// alterar nada. Antes só o Integra era testado — erro no nome do banco de controle
+        /// passava no teste. Banco de controle inexistente com o servidor acessível não é
+        /// erro: <see cref="GarantirBancoControleAsync"/> o cria ao conectar.
+        /// </summary>
+        public async Task<ResultadoTesteConexao> TestarConexao(AppConfig configTeste)
         {
-            try
+            var tarefaIntegra = TestarConexaoComErroAsync(configTeste.ConnectionStringIntegra);
+            var tarefaControle = TestarConexaoComErroAsync(configTeste.ConnectionStringControle);
+            string? erroIntegra = await tarefaIntegra.ConfigureAwait(false);
+            string? erroControle = await tarefaControle.ConfigureAwait(false);
+
+            bool controleSeraCriado = false;
+            if (erroControle != null)
             {
-                return await TestarConexaoAsync(configTeste.ConnectionStringIntegra).ConfigureAwait(false);
+                try
+                {
+                    await using var conn = new NpgsqlConnection(configTeste.ConnectionStringServidor);
+                    await conn.OpenAsync().ConfigureAwait(false);
+                    await using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT 1 FROM pg_database WHERE datname = @nome";
+                    cmd.Parameters.AddWithValue("nome", configTeste.BancoControle);
+                    controleSeraCriado = await cmd.ExecuteScalarAsync().ConfigureAwait(false) == null;
+                }
+                catch
+                {
+                    // Servidor inacessível também pelo banco postgres: fica o erro original.
+                }
             }
-            catch
-            {
-                return false;
-            }
+
+            return new ResultadoTesteConexao(erroIntegra, erroControle, controleSeraCriado);
         }
 
-        private static async Task<bool> TestarConexaoAsync(string connectionString)
+        private static async Task<bool> TestarConexaoAsync(string connectionString) =>
+            await TestarConexaoComErroAsync(connectionString).ConfigureAwait(false) == null;
+
+        /// <summary>Abre a conexão e roda SELECT 1. Devolve null se OK ou a mensagem de erro.</summary>
+        private static async Task<string?> TestarConexaoComErroAsync(string connectionString)
         {
             try
             {
@@ -827,11 +869,11 @@ namespace CONTROLE_DE_PEDIDOS
                 await using var cmd = conn.CreateCommand();
                 cmd.CommandText = "SELECT 1";
                 await cmd.ExecuteScalarAsync().ConfigureAwait(false);
-                return true;
+                return null;
             }
-            catch
+            catch (Exception ex)
             {
-                return false;
+                return ex.Message;
             }
         }
 

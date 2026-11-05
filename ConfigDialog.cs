@@ -287,12 +287,29 @@ namespace CONTROLE_DE_PEDIDOS
             btnTestar.Enabled = false;
 
             AplicarConfig();
-            bool ok = await DatabaseService.Instancia.TestarConexao(Config);
+            // Testa os dois bancos e reporta cada um (antes só o Integra era testado).
+            var r = await DatabaseService.Instancia.TestarConexao(Config);
             if (IsDisposed) return; // dialog fechado durante o teste
 
-            lblStatus.ForeColor = ok ? Theme.Success : Theme.Error;
-            lblStatus.Text = ok ? "Conexão bem-sucedida!" : "Falha na conexão. Verifique os dados.";
+            string textoControle = r.ErroControle == null ? "OK"
+                : r.ControleSeraCriado ? "será criado" : "FALHA";
+            lblStatus.ForeColor = r.IntegraOk && r.ControleOk ? Theme.Success
+                : r.IntegraOk || r.ControleOk ? Theme.Warning : Theme.Error;
+            lblStatus.Text = $"{Config.BancoIntegra}: {(r.IntegraOk ? "OK" : "FALHA")}  ·  {Config.BancoControle}: {textoControle}";
             btnTestar.Enabled = true;
+
+            if (!r.IntegraOk || !r.ControleOk || r.ControleSeraCriado)
+            {
+                var detalhes = $"Banco {Config.BancoIntegra} (Integra, somente leitura):\n  "
+                    + (r.IntegraOk ? "Conexão bem-sucedida." : r.ErroIntegra)
+                    + $"\n\nBanco {Config.BancoControle} (controle):\n  "
+                    + (r.ErroControle == null ? "Conexão bem-sucedida."
+                       : r.ControleSeraCriado ? "Ainda não existe; será criado automaticamente ao conectar."
+                       : r.ErroControle);
+                // Owner = este diálogo (modal), não o Form1.
+                MessageBox.Show(this, detalhes, "Teste de Conexão", MessageBoxButtons.OK,
+                    r.IntegraOk && r.ControleOk ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            }
         }
 
         private void BtnSalvar_Click(object? sender, EventArgs e)

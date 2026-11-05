@@ -10,7 +10,7 @@ Três cards em um container centralizado e responsivo:
 2. **Detalhes do Orçamento** (faixa superior, direita) — dados do orçamento selecionado em qualquer um dos grids.
 3. **Controle de Pedidos** (largura total, embaixo) — os pedidos sob gestão, com o pipeline de status.
 
-Status bar: pill de conexão (verde "Conectado - IP" / vermelho "Desconectado") + botão **Configurações**.
+Status bar: pill de conexão (verde "Conectado - IP" / amarelo "Parcial - IP (sem <banco>)" quando só um dos bancos responde / vermelho "Desconectado") + botão **Configurações**. Os dois bancos são testados de forma independente: com o Integra fora e o controle no ar, as telas que só usam o controle (Histórico de Exclusões, rotas, Exclusão em Massa etc.) continuam funcionando.
 
 Menu: **ROTAS** → Cadastro de Rotas · **PEDIDOS** → Exclusão em Massa, Histórico de Exclusões · **RELATÓRIOS** → Relatório de Carga, Relatório de NF-e, Imprimir por Orçamento... (Ctrl+P) · **OBSERVAÇÃO** → Corrigir Observação.
 
@@ -88,7 +88,7 @@ Mini-janela para imprimir **qualquer orçamento da filial** — inclusive antigo
 | CÓPIA DE PEDIDO | paisagem, ordenar alfabeticamente |
 | DADOS DA EMPRESA (CÓPIA DE PEDIDO) | Razão Social, CNPJ, IE, Endereço, Cidade/UF/CEP, Telefone, E-mail, WhatsApp — impressos no cabeçalho da Cópia; vazios são omitidos |
 
-Botão **Testar** valida a conexão antes de salvar. O `config.ini` é por máquina: no servidor RDS, preencher uma vez vale para todos os operadores.
+Botão **Testar** valida a conexão com os **dois** bancos antes de salvar e reporta cada um (Integra / controle; banco de controle inexistente com o servidor acessível aparece como "será criado"). O `config.ini` é por máquina: no servidor RDS, preencher uma vez vale para todos os operadores.
 
 ## Comportamentos transversais
 
