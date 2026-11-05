@@ -304,6 +304,8 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
+                Logger.Error("Erro ao carregar pedidos (Relatório de NF-e)", ex);
+                if (IsDisposed) return; // janela fechada durante a carga
                 MessageBox.Show(this, $"Erro ao carregar pedidos: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -336,10 +338,14 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
+                if (IsDisposed) return;
                 MessageBox.Show(this, $"Erro ao carregar rotas: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+            // async void: se a janela fechou durante a consulta, ShowDialog(this) num
+            // owner descartado lançaria exceção não tratada e derrubaria o app.
+            if (IsDisposed) return;
 
             if (rotas == null || rotas.Count == 0)
             {
@@ -492,7 +498,8 @@ namespace CONTROLE_DE_PEDIDOS
             selecionados.Sort((a, b) =>
                 string.Compare(a.Cliente, b.Cliente, StringComparison.OrdinalIgnoreCase));
 
-            var doc = new RelatorioNfePrintDoc(selecionados);
+            // using: PrintDocument é IDisposable — cada Visualizar vazava um.
+            using var doc = new RelatorioNfePrintDoc(selecionados);
             PrintingHelper.LogarEstado(doc, "Visualizar Relatório de NF-e");
             using var preview = new PrintPreviewDialog
             {

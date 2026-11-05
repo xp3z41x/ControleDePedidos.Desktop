@@ -327,12 +327,16 @@ namespace CONTROLE_DE_PEDIDOS
                     }
                 }
 
+                if (IsDisposed) return; // janela fechada durante a carga
+
                 dgvPedidos.DataSource = new SortableBindingList<PedidoCarga>(dados);
                 lblContagem.Text = $"{dados.Count} pedido{(dados.Count != 1 ? "s" : "")}";
                 AtualizarContagemSelecionados();
             }
             catch (Exception ex)
             {
+                Logger.Error("Erro ao carregar pedidos (Relatório de Carga)", ex);
+                if (IsDisposed) return; // janela fechada durante a carga
                 MessageBox.Show(this, $"Erro ao carregar pedidos: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -366,10 +370,14 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
+                if (IsDisposed) return;
                 MessageBox.Show(this, $"Erro ao carregar rotas: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+            // async void: se a janela fechou durante a consulta, ShowDialog(this) num
+            // owner descartado lançaria exceção não tratada e derrubaria o app.
+            if (IsDisposed) return;
 
             if (rotas == null || rotas.Count == 0)
             {
@@ -529,7 +537,8 @@ namespace CONTROLE_DE_PEDIDOS
                 return cmp != 0 ? cmp : string.Compare(a.Cliente, b.Cliente, StringComparison.OrdinalIgnoreCase);
             });
 
-            var doc = new RelatorioCargaPrintDoc(selecionados);
+            // using: PrintDocument é IDisposable — cada Visualizar vazava um.
+            using var doc = new RelatorioCargaPrintDoc(selecionados);
             PrintingHelper.LogarEstado(doc, "Visualizar Relatório de Carga");
             using var preview = new PrintPreviewDialog
             {
