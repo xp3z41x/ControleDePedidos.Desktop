@@ -10,14 +10,22 @@ namespace CONTROLE_DE_PEDIDOS
     /// Por padrão, <see cref="PrintDocument"/> herda <see cref="PrinterSettings"/>
     /// da impressora default do Windows. Se essa for uma térmica 10x15, o preview
     /// e a impressão calculam layout para 4x6 polegadas — quebrando relatórios A4.
-    /// Esta classe pré-seleciona uma impressora A4-capable no construtor da PrintDoc.
+    /// Esta classe pré-seleciona uma impressora A4-capable no construtor da PrintDoc:
+    /// a PADRÃO do usuário quando ela serve (A4 e não térmica), senão a primeira
+    /// A4 não-térmica instalada (ver <see cref="EscolherImpressoraA4"/>).
     /// </summary>
     public static class PrintingHelper
     {
         // Heurística para excluir impressoras claramente não-A4 (térmicas, etiqueta, POS).
+        // "fiscal"/"etq"/"etiquet": convenção de nomes do RDS (COL-FISCAL, ETQ-ECOMMERCE,
+        // ETIQUETADORA) — drivers genéricos dessas costumam declarar A4 mesmo sendo bobina.
         private static readonly string[] PalavrasTermicas =
             ["thermal", "térmica", "termica", "pos ", "label", "zebra",
-             "bematech", "epson tm", "daruma", "elgin", "10x15", "4x6"];
+             "bematech", "epson tm", "daruma", "elgin", "10x15", "4x6",
+             "fiscal", "cupom", "bobina", "etiquet", "etq", "80mm", "58mm"];
+
+        internal static bool PareceTermica(string nome) =>
+            PalavrasTermicas.Any(palavra => nome.Contains(palavra, StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
         /// PaperSize padrão A4: 210x297mm = 827x1169 centésimos de polegada.
@@ -173,9 +181,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         /// <summary>
         /// Aplica configurações A4 (paper size, landscape, margins) ao documento
-        /// E seleciona a primeira impressora instalada que suporte A4, evitando
-        /// térmicas/etiquetadoras quando possível. Idempotente — pode ser chamado
-        /// várias vezes (ex: no construtor + após PrintDialog).
+        /// E seleciona a impressora (padrão do usuário se A4-capaz e não térmica;
+        /// senão a primeira A4 não-térmica instalada — ver <see cref="EscolherImpressoraA4"/>).
+        /// Idempotente — pode ser chamado várias vezes (ex: no construtor + após PrintDialog).
         /// </summary>
         public static void AplicarConfigA4(PrintDocument doc, bool landscape)
         {
@@ -196,34 +204,104 @@ namespace CONTROLE_DE_PEDIDOS
         }
 
         /// <summary>
-        /// Retorna o nome da primeira impressora instalada que suporta A4,
-        /// preferindo as que NÃO parecem ser térmicas/etiquetadoras.
-        /// Null se nenhuma suporta.
+        /// Retorna a impressora A4 a usar: a PADRÃO do Windows do usuário quando ela
+        /// suporta A4 e não parece térmica; senão a primeira instalada que suporta A4,
+        /// preferindo as não-térmicas. Null se nenhuma suporta. Loga a escolha e o motivo.
+        ///
+        /// Por que a padrão primeiro: no RDS as 16 impressoras de rede de todas as lojas
+        /// aparecem para todo operador; "a primeira A4 da enumeração" era a COL-A4 de
+        /// outra loja para todo mundo. A padrão do usuário é a da mesa dele.
         /// </summary>
         public static string? EncontrarImpressoraA4Capaz()
         {
-            string? primeiraA4 = null;
-            foreach (string nome in PrinterSettings.InstalledPrinters)
+            string? padrao = ObterNomeImpressoraPadrao();
+            var instaladas = PrinterSettings.InstalledPrinters.Cast<string>().ToList();
+            var (nome, motivo, _) = EscolherImpressoraA4(padrao, instaladas, ConsultarSuporteA4);
+            Logger.Info($"Impressora A4: '{nome ?? "(nenhuma)"}' — {motivo}");
+            return nome;
+        }
+
+        /// <summary>
+        /// Núcleo PURO da seleção (testável sem impressoras reais).
+        /// <paramref name="suportaA4"/> devolve null quando a consulta falhou.
+        /// <c>Completa</c> = false se alguma consulta relevante falhou (resultado
+        /// não deve ser cacheado).
+        /// </summary>
+        internal static (string? Nome, string Motivo, bool Completa) EscolherImpressoraA4(
+            string? padrao, IReadOnlyList<string> instaladas, Func<string, bool?> suportaA4)
+        {
+            bool completa = true;
+            string motivoPadrao;
+
+            if (string.IsNullOrEmpty(padrao))
+                motivoPadrao = "sem impressora padrão no Windows";
+            else if (PareceTermica(padrao))
+                motivoPadrao = $"padrão '{padrao}' parece térmica/etiqueta";
+            else
             {
-                try
-                {
-                    var ps = new PrinterSettings { PrinterName = nome };
-                    bool suportaA4 = ps.PaperSizes.Cast<PaperSize>()
-                        .Any(p => p.Kind == PaperKind.A4);
-                    if (!suportaA4) continue;
-
-                    primeiraA4 ??= nome;
-
-                    bool pareceTermica = PalavrasTermicas.Any(palavra =>
-                        nome.Contains(palavra, StringComparison.OrdinalIgnoreCase));
-                    if (!pareceTermica) return nome;
-                }
-                catch (Exception ex)
-                {
-                    Logger.Warn($"Falha ao consultar impressora '{nome}': {ex.Message}");
-                }
+                bool? a4 = suportaA4(padrao);
+                if (a4 == true)
+                    return (padrao, "impressora padrão do Windows (suporta A4)", true);
+                if (a4 == null) completa = false;
+                motivoPadrao = a4 == null
+                    ? $"falha ao consultar a padrão '{padrao}'"
+                    : $"padrão '{padrao}' não declara A4";
             }
-            return primeiraA4; // pode ser null se nada suporta A4
+
+            string? primeiraA4 = null;
+            foreach (var nome in instaladas)
+            {
+                if (string.Equals(nome, padrao, StringComparison.OrdinalIgnoreCase)
+                    && !PareceTermica(nome)) continue; // já avaliada acima
+                bool termica = PareceTermica(nome);
+                // Térmica só interessa como último recurso — não consultar se já há uma A4.
+                if (termica && primeiraA4 != null) continue;
+                bool? a4 = suportaA4(nome);
+                if (a4 == null) { completa = false; continue; }
+                if (a4 != true) continue;
+                if (!termica)
+                    return (nome, $"fallback: {motivoPadrao}; primeira A4 não-térmica instalada", completa);
+                primeiraA4 ??= nome;
+            }
+            return primeiraA4 != null
+                ? (primeiraA4, $"fallback: {motivoPadrao}; só há A4 com cara de térmica", completa)
+                : (null, $"{motivoPadrao}; nenhuma impressora instalada declara A4", completa);
+        }
+
+        /// <summary>
+        /// Nome da impressora padrão do Windows para o usuário atual, ou null se não
+        /// houver (o getter de <see cref="PrinterSettings.PrinterName"/> devolve um
+        /// texto tipo "&lt;no default printer&gt;" nesse caso — não é nome instalado).
+        /// </summary>
+        internal static string? ObterNomeImpressoraPadrao()
+        {
+            try
+            {
+                var nome = new PrinterSettings().PrinterName;
+                return PrinterSettings.InstalledPrinters.Cast<string>()
+                    .Any(n => string.Equals(n, nome, StringComparison.OrdinalIgnoreCase)) ? nome : null;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Falha ao obter impressora padrão: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>true/false = declara (ou não) A4; null = consulta falhou.</summary>
+        private static bool? ConsultarSuporteA4(string nome)
+        {
+            try
+            {
+                var ps = new PrinterSettings { PrinterName = nome };
+                if (!ps.IsValid) return null;
+                return ps.PaperSizes.Cast<PaperSize>().Any(p => p.Kind == PaperKind.A4);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Falha ao consultar impressora '{nome}': {ex.Message}");
+                return null;
+            }
         }
 
         /// <summary>
