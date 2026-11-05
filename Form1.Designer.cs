@@ -72,9 +72,25 @@ namespace CONTROLE_DE_PEDIDOS
         private const int DetalhesRowH      = 46;    // linhas 1 e 2 do card de detalhes (fixas)
         private const int DetalhesRow3Min   = 56;    // observação (elástica, absorve o resto)
 
-        // O AutoScaleMode.Font não escala as métricas aplicadas em runtime pelo layout
-        // manual; este helper as converte para o DPI corrente do form (PerMonitorV2).
-        private int Dpi(int v) => LogicalToDeviceUnits(v);
+        // Toda medida fixa é lógica (96 DPI) e passa por Dpi(): o AutoScaleMode.Font não
+        // escala o layout manual (o fator de autoescala é 1 — ver InitializeComponent).
+        // Dpi() lê o DeviceDpi corrente a cada chamada (PerMonitorV2).
+        private int Dpi(int v) => this.Px(v);
+        private Size Dpi(int largura, int altura) => this.Px(new Size(largura, altura));
+        private Padding Dpi(int esquerda, int topo, int direita, int baixo) =>
+            this.Px(new Padding(esquerda, topo, direita, baixo));
+
+        // Medidas fixas atribuídas uma vez na montagem (alturas de faixas, tamanhos de
+        // botões, paddings). Ficam registradas para serem reaplicadas, em valores
+        // absolutos, quando o DPI muda com o app aberto (reconexão RDP de um cliente com
+        // outra escala, troca de monitor) — o resultado não depende do quanto o próprio
+        // WinForms reescalou antes.
+        private readonly List<Action> _metricasDpi = [];
+        private void Metrica(Action aplicar)
+        {
+            aplicar();
+            _metricasDpi.Add(aplicar);
+        }
 
         protected override void Dispose(bool disposing)
         {
@@ -90,18 +106,20 @@ namespace CONTROLE_DE_PEDIDOS
 
             components = new System.ComponentModel.Container();
             DoubleBuffered = true;
+            // A fonte ANTES do AutoScaleMode: as AutoScaleDimensions são capturadas da fonte
+            // final e o fator de autoescala fica 1 em qualquer DPI (o layout é todo manual,
+            // via Dpi()). Com a ordem invertida, acima de 100% a diferença de métrica entre
+            // a fonte padrão (9 pt) e a do tema (9,5 pt) reescalaria tudo uma segunda vez.
+            Font = Theme.FontRegular;
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(1400, 720);
-            // Mínimo que ainda comporta a faixa superior (pendentes + detalhes) sem
-            // estourar o container: ClientSize precisa ≥ Dpi(MinContainerWidth) + padding.
-            MinimumSize = new Size(1060, 640);
+            ClientSize = Dpi(1400, 720);
+            AjustarTamanhoMinimo();
             Text = "Controle de Pedidos";
             var exeIcon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
             if (exeIcon != null)
                 Icon = exeIcon;
             BackColor = Theme.BgDark;
             ForeColor = Theme.TextPrimary;
-            Font = Theme.FontRegular;
             StartPosition = FormStartPosition.CenterScreen;
             WindowState = FormWindowState.Maximized;
 
@@ -113,9 +131,9 @@ namespace CONTROLE_DE_PEDIDOS
                 BackColor = Theme.BgPanel,
                 ForeColor = Theme.TextPrimary,
                 Font = Theme.FontRegular,
-                Padding = new Padding(8, 2, 0, 2),
                 Renderer = new ThemeMenuRenderer()
             };
+            Metrica(() => menuStrip.Padding = Dpi(8, 2, 0, 2));
 
             var menuRotas = new ToolStripMenuItem("ROTAS")
             {
@@ -195,23 +213,27 @@ namespace CONTROLE_DE_PEDIDOS
             statusBarPanel = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 32,
-                BackColor = Theme.BgStatusBar,
-                Padding = new Padding(16, 0, 16, 0)
+                BackColor = Theme.BgStatusBar
             };
+            Metrica(() =>
+            {
+                statusBarPanel.Height = Dpi(32);
+                statusBarPanel.Padding = Dpi(16, 0, 16, 0);
+            });
             statusBarPanel.SuspendLayout();
 
             panelIndicador = new Panel
             {
-                Size = new Size(10, 10),
                 BackColor = Theme.TextMuted
             };
+            Metrica(() => panelIndicador.Size = Dpi(10, 10));
             panelIndicador.Paint += (_, e) =>
             {
                 e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 using var brush = new SolidBrush(panelIndicador.BackColor);
                 e.Graphics.Clear(statusBarPanel.BackColor);
-                e.Graphics.FillEllipse(brush, 0, 0, 9, 9);
+                int d = panelIndicador.Width - 1;
+                e.Graphics.FillEllipse(brush, 0, 0, d, d);
             };
 
             lblStatusConexao = new Label
@@ -225,7 +247,6 @@ namespace CONTROLE_DE_PEDIDOS
             btnConfig = new Button
             {
                 Text = "Configura\u00e7\u00f5es",
-                Size = new Size(110, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Theme.BgStatusBar,
                 ForeColor = Theme.TextSecondary,
@@ -233,6 +254,7 @@ namespace CONTROLE_DE_PEDIDOS
                 Cursor = Cursors.Hand,
                 TextAlign = ContentAlignment.MiddleCenter
             };
+            Metrica(() => btnConfig.Size = Dpi(110, 26));
             btnConfig.FlatAppearance.BorderSize = 0;
             btnConfig.FlatAppearance.MouseOverBackColor = Theme.BgCard;
             btnConfig.Click += BtnConfig_Click;
@@ -274,18 +296,18 @@ namespace CONTROLE_DE_PEDIDOS
             var headerDetalhes = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 36,
                 BackColor = Theme.BgCard
             };
+            Metrica(() => headerDetalhes.Height = Dpi(36));
 
             var lblTituloDetalhes = new Label
             {
                 Text = "Detalhes do Orçamento",
                 Font = Theme.FontTitle,
                 ForeColor = Theme.TextPrimary,
-                AutoSize = true,
-                Location = new Point(16, 8)
+                AutoSize = true
             };
+            Metrica(() => lblTituloDetalhes.Location = new Point(Dpi(16), Dpi(8)));
             headerDetalhes.Controls.Add(lblTituloDetalhes);
 
             var separadorDetalhes = new Panel
@@ -301,7 +323,6 @@ namespace CONTROLE_DE_PEDIDOS
                 BackColor = Theme.BgPanel
             };
 
-            int padCel = Dpi(14);
             var sepsVerticaisDetalhes = new List<Panel>();
             var sepHorizontalDetalhes = new Panel { Size = new Size(1, 1), BackColor = Theme.Border };
             var sepHorizontalDetalhes2 = new Panel { Size = new Size(1, 1), BackColor = Theme.Border };
@@ -386,6 +407,7 @@ namespace CONTROLE_DE_PEDIDOS
                 int alturaTotal = containerDetalhes.ClientSize.Height;
                 if (larguraTotal <= 0 || alturaTotal <= 0) return;
                 int sepIdx = 0;
+                int padCel = Dpi(14);
 
                 int PosicionarLinha(((Label tit, Label val) cel, float pct, int min)[] linha, int y, int rowH)
                 {
@@ -475,10 +497,13 @@ namespace CONTROLE_DE_PEDIDOS
             var panelHeader = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 36,   // alinhado com o headerDetalhes, que fica ao lado na faixa
-                BackColor = Theme.BgCard,
-                Padding = new Padding(16, 0, 16, 0)
+                BackColor = Theme.BgCard
             };
+            Metrica(() =>
+            {
+                panelHeader.Height = Dpi(36);   // alinhado com o headerDetalhes, que fica ao lado na faixa
+                panelHeader.Padding = Dpi(16, 0, 16, 0);
+            });
 
             lblTituloOrcamentos = new Label
             {
@@ -486,7 +511,7 @@ namespace CONTROLE_DE_PEDIDOS
                 Font = Theme.FontTitle,
                 ForeColor = Theme.TextPrimary,
                 AutoSize = true,
-                Location = new Point(16, 14)
+                Location = new Point(Dpi(16), Dpi(14))
             };
 
             lblContagem = new Label
@@ -500,10 +525,10 @@ namespace CONTROLE_DE_PEDIDOS
             btnVerIgnorados = new Button
             {
                 Text = "Ignorados",
-                Size = new Size(80, 28),
                 Font = Theme.FontSmall
             };
             Theme.EstilizarBotao(btnVerIgnorados);
+            Metrica(() => btnVerIgnorados.Size = Dpi(80, 28));
             btnVerIgnorados.Click += BtnVerIgnorados_Click;
 
             panelHeader.Controls.Add(lblTituloOrcamentos);
@@ -511,11 +536,11 @@ namespace CONTROLE_DE_PEDIDOS
             panelHeader.Controls.Add(btnVerIgnorados);
             panelHeader.Resize += (_, _) =>
             {
-                lblTituloOrcamentos.Location = new Point(16, (panelHeader.Height - lblTituloOrcamentos.Height) / 2);
+                lblTituloOrcamentos.Location = new Point(Dpi(16), (panelHeader.Height - lblTituloOrcamentos.Height) / 2);
                 int cy = (panelHeader.Height - btnVerIgnorados.Height) / 2;
-                btnVerIgnorados.Location = new Point(panelHeader.Width - btnVerIgnorados.Width - 16, cy);
+                btnVerIgnorados.Location = new Point(panelHeader.Width - btnVerIgnorados.Width - Dpi(16), cy);
                 lblContagem.Location = new Point(
-                    btnVerIgnorados.Left - lblContagem.Width - 12,
+                    btnVerIgnorados.Left - lblContagem.Width - Dpi(12),
                     (panelHeader.Height - lblContagem.Height) / 2);
             };
             lblContagem.TextChanged += (_, _) =>
@@ -523,7 +548,7 @@ namespace CONTROLE_DE_PEDIDOS
                 BeginInvoke(() =>
                 {
                     lblContagem.Location = new Point(
-                        btnVerIgnorados.Left - lblContagem.Width - 12,
+                        btnVerIgnorados.Left - lblContagem.Width - Dpi(12),
                         (panelHeader.Height - lblContagem.Height) / 2);
                 });
             };
@@ -538,9 +563,9 @@ namespace CONTROLE_DE_PEDIDOS
             var panelAcoes = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 40,   // compacto: a faixa superior é curta, cada pixel vira linha
                 BackColor = Theme.BgCard
             };
+            Metrica(() => panelAcoes.Height = Dpi(40));   // compacto: a faixa superior é curta, cada pixel vira linha
             panelAcoes.Paint += (_, e) =>
             {
                 using var pen = new Pen(Theme.Border);
@@ -549,18 +574,18 @@ namespace CONTROLE_DE_PEDIDOS
 
             btnIgnorar = new Button
             {
-                Text = "Ignorar Orçamento",
-                Size = new Size(150, 30)
+                Text = "Ignorar Orçamento"
             };
+            Metrica(() => btnIgnorar.Size = Dpi(150, 30));
             Theme.EstilizarBotao(btnIgnorar);
             btnIgnorar.ForeColor = Theme.Warning;
             btnIgnorar.Click += BtnIgnorar_Click;
 
             btnAprovar = new Button
             {
-                Text = "Controlar Pedido",
-                Size = new Size(140, 30)
+                Text = "Controlar Pedido"
             };
+            Metrica(() => btnAprovar.Size = Dpi(140, 30));
             Theme.EstilizarBotao(btnAprovar, primario: true);
             btnAprovar.Click += BtnAprovar_Click;
 
@@ -568,8 +593,8 @@ namespace CONTROLE_DE_PEDIDOS
             panelAcoes.Controls.Add(btnIgnorar);
             panelAcoes.Resize += (_, _) =>
             {
-                btnIgnorar.Location = new Point(panelAcoes.Width - btnIgnorar.Width - 16, (panelAcoes.Height - btnIgnorar.Height) / 2);
-                btnAprovar.Location = new Point(btnIgnorar.Left - btnAprovar.Width - 8, (panelAcoes.Height - btnAprovar.Height) / 2);
+                btnIgnorar.Location = new Point(panelAcoes.Width - btnIgnorar.Width - Dpi(16), (panelAcoes.Height - btnIgnorar.Height) / 2);
+                btnAprovar.Location = new Point(btnIgnorar.Left - btnAprovar.Width - Dpi(8), (panelAcoes.Height - btnAprovar.Height) / 2);
             };
 
             var separadorInferior = new Panel
@@ -594,8 +619,8 @@ namespace CONTROLE_DE_PEDIDOS
             Theme.EstilizarGrid(dgvOrcamentos, "Form1_Orcamentos");
 
             dgvOrcamentos.Columns.AddRange(
-                new DataGridViewTextBoxColumn { Name = "colOrcamento", HeaderText = "ORÇAMENTO", DataPropertyName = "Orcamento", Width = 90, MinimumWidth = 70 },
-                new DataGridViewTextBoxColumn { Name = "colNome", HeaderText = "CLIENTE", DataPropertyName = "Nome", Width = 280, MinimumWidth = 100 }
+                new DataGridViewTextBoxColumn { Name = "colOrcamento", HeaderText = "ORÇAMENTO", DataPropertyName = "Orcamento", Width = Dpi(90), MinimumWidth = Dpi(70) },
+                new DataGridViewTextBoxColumn { Name = "colNome", HeaderText = "CLIENTE", DataPropertyName = "Nome", Width = Dpi(280), MinimumWidth = Dpi(100) }
             );
 
             panelOrcamentos.Controls.Add(dgvOrcamentos);
@@ -625,10 +650,13 @@ namespace CONTROLE_DE_PEDIDOS
             var headerPedidos = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 48,
-                BackColor = Theme.BgCard,
-                Padding = new Padding(16, 0, 16, 0)
+                BackColor = Theme.BgCard
             };
+            Metrica(() =>
+            {
+                headerPedidos.Height = Dpi(48);
+                headerPedidos.Padding = Dpi(16, 0, 16, 0);
+            });
 
             lblTituloPedidos = new Label
             {
@@ -636,7 +664,7 @@ namespace CONTROLE_DE_PEDIDOS
                 Font = Theme.FontTitle,
                 ForeColor = Theme.TextPrimary,
                 AutoSize = true,
-                Location = new Point(16, 14)
+                Location = new Point(Dpi(16), Dpi(14))
             };
 
             lblContagemPedidos = new Label
@@ -651,9 +679,9 @@ namespace CONTROLE_DE_PEDIDOS
             headerPedidos.Controls.Add(lblContagemPedidos);
             headerPedidos.Resize += (_, _) =>
             {
-                lblTituloPedidos.Location = new Point(16, (headerPedidos.Height - lblTituloPedidos.Height) / 2);
+                lblTituloPedidos.Location = new Point(Dpi(16), (headerPedidos.Height - lblTituloPedidos.Height) / 2);
                 lblContagemPedidos.Location = new Point(
-                    headerPedidos.Width - lblContagemPedidos.Width - 16,
+                    headerPedidos.Width - lblContagemPedidos.Width - Dpi(16),
                     (headerPedidos.Height - lblContagemPedidos.Height) / 2);
             };
             lblContagemPedidos.TextChanged += (_, _) =>
@@ -661,7 +689,7 @@ namespace CONTROLE_DE_PEDIDOS
                 BeginInvoke(() =>
                 {
                     lblContagemPedidos.Location = new Point(
-                        headerPedidos.Width - lblContagemPedidos.Width - 16,
+                        headerPedidos.Width - lblContagemPedidos.Width - Dpi(16),
                         (headerPedidos.Height - lblContagemPedidos.Height) / 2);
                 });
             };
@@ -750,21 +778,21 @@ namespace CONTROLE_DE_PEDIDOS
 
             var statusCellStyle = new DataGridViewCellStyle { Alignment = DataGridViewContentAlignment.MiddleCenter };
             dgvPedidos.Columns.AddRange(
-                new DataGridViewTextBoxColumn { Name = "colPedOrcamento", HeaderText = "ORÇ.", DataPropertyName = "Orcamento", Width = 100, MinimumWidth = 80 },
-                new DataGridViewTextBoxColumn { Name = "colPedCliente", HeaderText = "CLIENTE", DataPropertyName = "Cliente", Width = 200, MinimumWidth = 120 },
-                new DataGridViewTextBoxColumn { Name = "colPedFantasia", HeaderText = "NOME FANTASIA", DataPropertyName = "NomeFantasia", Width = 180, MinimumWidth = 100 },
-                new DataGridViewTextBoxColumn { Name = "colPedRota", HeaderText = "ROTA", DataPropertyName = "Rota", Width = 120, MinimumWidth = 80 },
-                new DataGridViewTextBoxColumn { Name = "colPedAprovado", HeaderText = "APROVADO", DataPropertyName = "AprovadoTexto", Width = 110, MinimumWidth = 80, DefaultCellStyle = statusCellStyle },
-                new DataGridViewTextBoxColumn { Name = "colPedSeparacao", HeaderText = "SEPARANDO", DataPropertyName = "EmSeparacaoTexto", Width = 110, MinimumWidth = 80, DefaultCellStyle = statusCellStyle },
-                new DataGridViewTextBoxColumn { Name = "colPedConferido", HeaderText = "CONFERIDO", DataPropertyName = "ConferidoTexto", Width = 110, MinimumWidth = 80, DefaultCellStyle = statusCellStyle },
-                new DataGridViewTextBoxColumn { Name = "colPedLiberado", HeaderText = "LIBERADO", DataPropertyName = "LiberadoTexto", Width = 110, MinimumWidth = 80, DefaultCellStyle = statusCellStyle },
-                new DataGridViewTextBoxColumn { Name = "colPedFaturado", HeaderText = "FATURADO", DataPropertyName = "FaturadoTexto", Width = 110, MinimumWidth = 80, DefaultCellStyle = statusCellStyle }
+                new DataGridViewTextBoxColumn { Name = "colPedOrcamento", HeaderText = "ORÇ.", DataPropertyName = "Orcamento", Width = Dpi(100), MinimumWidth = Dpi(80) },
+                new DataGridViewTextBoxColumn { Name = "colPedCliente", HeaderText = "CLIENTE", DataPropertyName = "Cliente", Width = Dpi(200), MinimumWidth = Dpi(120) },
+                new DataGridViewTextBoxColumn { Name = "colPedFantasia", HeaderText = "NOME FANTASIA", DataPropertyName = "NomeFantasia", Width = Dpi(180), MinimumWidth = Dpi(100) },
+                new DataGridViewTextBoxColumn { Name = "colPedRota", HeaderText = "ROTA", DataPropertyName = "Rota", Width = Dpi(120), MinimumWidth = Dpi(80) },
+                new DataGridViewTextBoxColumn { Name = "colPedAprovado", HeaderText = "APROVADO", DataPropertyName = "AprovadoTexto", Width = Dpi(110), MinimumWidth = Dpi(80), DefaultCellStyle = statusCellStyle },
+                new DataGridViewTextBoxColumn { Name = "colPedSeparacao", HeaderText = "SEPARANDO", DataPropertyName = "EmSeparacaoTexto", Width = Dpi(110), MinimumWidth = Dpi(80), DefaultCellStyle = statusCellStyle },
+                new DataGridViewTextBoxColumn { Name = "colPedConferido", HeaderText = "CONFERIDO", DataPropertyName = "ConferidoTexto", Width = Dpi(110), MinimumWidth = Dpi(80), DefaultCellStyle = statusCellStyle },
+                new DataGridViewTextBoxColumn { Name = "colPedLiberado", HeaderText = "LIBERADO", DataPropertyName = "LiberadoTexto", Width = Dpi(110), MinimumWidth = Dpi(80), DefaultCellStyle = statusCellStyle },
+                new DataGridViewTextBoxColumn { Name = "colPedFaturado", HeaderText = "FATURADO", DataPropertyName = "FaturadoTexto", Width = Dpi(110), MinimumWidth = Dpi(80), DefaultCellStyle = statusCellStyle }
             );
 
             var panelAcoesPedidos = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 46,
+                Height = Dpi(46),
                 BackColor = Theme.BgCard
             };
             panelAcoesPedidos.Paint += (_, e) =>
@@ -775,86 +803,86 @@ namespace CONTROLE_DE_PEDIDOS
 
             btnAlterarRota = new Button
             {
-                Text = "Alterar Rota",
-                Size = new Size(110, 30)
+                Text = "Alterar Rota"
             };
+            Metrica(() => btnAlterarRota.Size = Dpi(110, 30));
             Theme.EstilizarBotao(btnAlterarRota);
             btnAlterarRota.Click += BtnAlterarRota_Click;
 
             btnExcluirPedido = new Button
             {
-                Text = "Excluir Pedido",
-                Size = new Size(120, 30)
+                Text = "Excluir Pedido"
             };
+            Metrica(() => btnExcluirPedido.Size = Dpi(120, 30));
             Theme.EstilizarBotao(btnExcluirPedido);
             btnExcluirPedido.ForeColor = Theme.Error;
             btnExcluirPedido.Click += BtnExcluirPedido_Click;
 
             btnTravar = new Button
             {
-                Text = "\uD83D\uDD12 Travar",
-                Size = new Size(100, 30)
+                Text = "\uD83D\uDD12 Travar"
             };
+            Metrica(() => btnTravar.Size = Dpi(100, 30));
             Theme.EstilizarBotao(btnTravar);
             btnTravar.ForeColor = Theme.Warning;
             btnTravar.Click += BtnTravar_Click;
 
             btnDestravar = new Button
             {
-                Text = "\uD83D\uDD13 Destravar",
-                Size = new Size(110, 30)
+                Text = "\uD83D\uDD13 Destravar"
             };
+            Metrica(() => btnDestravar.Size = Dpi(110, 30));
             Theme.EstilizarBotao(btnDestravar);
             btnDestravar.ForeColor = Theme.Success;
             btnDestravar.Click += BtnDestravar_Click;
 
             btnAssumir = new Button
             {
-                Text = "Assumir",
-                Size = new Size(90, 30)
+                Text = "Assumir"
             };
+            Metrica(() => btnAssumir.Size = Dpi(90, 30));
             Theme.EstilizarBotao(btnAssumir);
             btnAssumir.ForeColor = Theme.StatusEmFaturamentoFg;
             btnAssumir.Click += BtnAssumir_Click;
 
             btnLargar = new Button
             {
-                Text = "Largar",
-                Size = new Size(80, 30)
+                Text = "Largar"
             };
+            Metrica(() => btnLargar.Size = Dpi(80, 30));
             Theme.EstilizarBotao(btnLargar);
             btnLargar.ForeColor = Theme.Warning;
             btnLargar.Click += BtnLargar_Click;
 
             btnImprimirSeparacao = new Button
             {
-                Text = "\uD83D\uDDA8 Imprimir",
-                Size = new Size(110, 30)
+                Text = "\uD83D\uDDA8 Imprimir"
             };
+            Metrica(() => btnImprimirSeparacao.Size = Dpi(110, 30));
             Theme.EstilizarBotao(btnImprimirSeparacao);
             btnImprimirSeparacao.Click += BtnImprimirSeparacao_Click;
 
             btnCopiaPedido = new Button
             {
-                Text = "\uD83D\uDCC4 C\u00F3pia de Pedido",
-                Size = new Size(150, 30)
+                Text = "\uD83D\uDCC4 C\u00F3pia de Pedido"
             };
+            Metrica(() => btnCopiaPedido.Size = Dpi(150, 30));
             Theme.EstilizarBotao(btnCopiaPedido);
             btnCopiaPedido.Click += BtnCopiaPedido_Click;
 
             btnRetornarStatus = new Button
             {
-                Text = "\u25C0 Retornar",
-                Size = new Size(110, 30)
+                Text = "\u25C0 Retornar"
             };
+            Metrica(() => btnRetornarStatus.Size = Dpi(110, 30));
             Theme.EstilizarBotao(btnRetornarStatus);
             btnRetornarStatus.Click += BtnRetornarStatus_Click;
 
             btnAvancarStatus = new Button
             {
-                Text = "Avançar \u25B6",
-                Size = new Size(110, 30)
+                Text = "Avançar \u25B6"
             };
+            Metrica(() => btnAvancarStatus.Size = Dpi(110, 30));
             Theme.EstilizarBotao(btnAvancarStatus, primario: true);
             btnAvancarStatus.Click += BtnAvancarStatus_Click;
 
@@ -873,12 +901,13 @@ namespace CONTROLE_DE_PEDIDOS
             // cabem lado a lado — a barra vira duas linhas, com o grupo de status embaixo.
             void ReposicionarBotoesPedidos()
             {
-                int larguraEsquerda = 16 + btnAlterarRota.Width + 8 + btnExcluirPedido.Width + 8
-                    + btnTravar.Width + 8 + btnDestravar.Width + 8 + btnAssumir.Width + 8 + btnLargar.Width;
-                int larguraDireita = btnCopiaPedido.Width + 8 + btnImprimirSeparacao.Width + 8 + btnRetornarStatus.Width + 8 + btnAvancarStatus.Width + 16;
-                bool duasLinhas = larguraEsquerda + 24 + larguraDireita > panelAcoesPedidos.Width;
+                int m16 = Dpi(16), g8 = Dpi(8);
+                int larguraEsquerda = m16 + btnAlterarRota.Width + g8 + btnExcluirPedido.Width + g8
+                    + btnTravar.Width + g8 + btnDestravar.Width + g8 + btnAssumir.Width + g8 + btnLargar.Width;
+                int larguraDireita = btnCopiaPedido.Width + g8 + btnImprimirSeparacao.Width + g8 + btnRetornarStatus.Width + g8 + btnAvancarStatus.Width + m16;
+                bool duasLinhas = larguraEsquerda + Dpi(24) + larguraDireita > panelAcoesPedidos.Width;
 
-                int alturaAlvo = duasLinhas ? 82 : 46;
+                int alturaAlvo = duasLinhas ? Dpi(82) : Dpi(46);
                 if (panelAcoesPedidos.Height != alturaAlvo)
                 {
                     // Mudar Height dentro do pass de layout do dock deixa o grid (Dock=Fill)
@@ -889,21 +918,24 @@ namespace CONTROLE_DE_PEDIDOS
                         panelAcoesPedidos.Height = alturaAlvo;
                 }
 
-                int cyEsq = duasLinhas ? 8 : (panelAcoesPedidos.Height - 30) / 2;
-                int cyDir = duasLinhas ? panelAcoesPedidos.Height - 38 : cyEsq;
+                int alturaBotao = btnAvancarStatus.Height;
+                int cyEsq = duasLinhas ? g8 : (panelAcoesPedidos.Height - alturaBotao) / 2;
+                int cyDir = duasLinhas ? panelAcoesPedidos.Height - alturaBotao - g8 : cyEsq;
 
-                btnAlterarRota.Location = new Point(16, cyEsq);
-                btnExcluirPedido.Location = new Point(btnAlterarRota.Right + 8, cyEsq);
-                btnTravar.Location = new Point(btnExcluirPedido.Right + 8, cyEsq);
-                btnDestravar.Location = new Point(btnTravar.Right + 8, cyEsq);
-                btnAssumir.Location = new Point(btnDestravar.Right + 8, cyEsq);
-                btnLargar.Location = new Point(btnAssumir.Right + 8, cyEsq);
-                btnAvancarStatus.Location = new Point(panelAcoesPedidos.Width - btnAvancarStatus.Width - 16, cyDir);
-                btnRetornarStatus.Location = new Point(btnAvancarStatus.Left - btnRetornarStatus.Width - 8, cyDir);
-                btnImprimirSeparacao.Location = new Point(btnRetornarStatus.Left - btnImprimirSeparacao.Width - 8, cyDir);
-                btnCopiaPedido.Location = new Point(btnImprimirSeparacao.Left - btnCopiaPedido.Width - 8, cyDir);
+                btnAlterarRota.Location = new Point(m16, cyEsq);
+                btnExcluirPedido.Location = new Point(btnAlterarRota.Right + g8, cyEsq);
+                btnTravar.Location = new Point(btnExcluirPedido.Right + g8, cyEsq);
+                btnDestravar.Location = new Point(btnTravar.Right + g8, cyEsq);
+                btnAssumir.Location = new Point(btnDestravar.Right + g8, cyEsq);
+                btnLargar.Location = new Point(btnAssumir.Right + g8, cyEsq);
+                btnAvancarStatus.Location = new Point(panelAcoesPedidos.Width - btnAvancarStatus.Width - m16, cyDir);
+                btnRetornarStatus.Location = new Point(btnAvancarStatus.Left - btnRetornarStatus.Width - g8, cyDir);
+                btnImprimirSeparacao.Location = new Point(btnRetornarStatus.Left - btnImprimirSeparacao.Width - g8, cyDir);
+                btnCopiaPedido.Location = new Point(btnImprimirSeparacao.Left - btnCopiaPedido.Width - g8, cyDir);
             }
             panelAcoesPedidos.Resize += (_, _) => ReposicionarBotoesPedidos();
+            // A altura da barra (1 ou 2 linhas) e as posições dependem do DPI
+            _metricasDpi.Add(ReposicionarBotoesPedidos);
 
             var separadorPedidosInferior = new Panel
             {
@@ -918,10 +950,13 @@ namespace CONTROLE_DE_PEDIDOS
             panelFiltrosPedidos = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 40,
-                BackColor = Theme.BgCard,
-                Padding = new Padding(12, 0, 12, 0)
+                BackColor = Theme.BgCard
             };
+            Metrica(() =>
+            {
+                panelFiltrosPedidos.Height = Dpi(40);
+                panelFiltrosPedidos.Padding = Dpi(12, 0, 12, 0);
+            });
 
             toolStripFiltros = new ToolStrip
             {
@@ -931,7 +966,6 @@ namespace CONTROLE_DE_PEDIDOS
                 ForeColor = Theme.TextPrimary,
                 Font = Theme.FontRegular,
                 Renderer = new ThemeToolStripRenderer(),
-                ImageScalingSize = new Size(16, 16),
                 AutoSize = false,
                 Padding = new Padding(0)
             };
@@ -939,8 +973,7 @@ namespace CONTROLE_DE_PEDIDOS
             var lblFiltrar = new ToolStripLabel("Filtrar:")
             {
                 ForeColor = Theme.TextSecondary,
-                Font = Theme.FontSmall,
-                Margin = new Padding(4, 0, 8, 0)
+                Font = Theme.FontSmall
             };
 
             btnFiltroVendedor = new ToolStripDropDownButton("Vendedor")
@@ -948,27 +981,21 @@ namespace CONTROLE_DE_PEDIDOS
                 DisplayStyle = ToolStripItemDisplayStyle.Text,
                 ForeColor = Theme.TextPrimary,
                 Font = Theme.FontRegular,
-                AutoToolTip = false,
-                Margin = new Padding(0, 4, 4, 4),
-                Padding = new Padding(10, 0, 6, 0)
+                AutoToolTip = false
             };
             btnFiltroRota = new ToolStripDropDownButton("Rota")
             {
                 DisplayStyle = ToolStripItemDisplayStyle.Text,
                 ForeColor = Theme.TextPrimary,
                 Font = Theme.FontRegular,
-                AutoToolTip = false,
-                Margin = new Padding(0, 4, 4, 4),
-                Padding = new Padding(10, 0, 6, 0)
+                AutoToolTip = false
             };
             btnFiltroEtapa = new ToolStripDropDownButton("Etapa")
             {
                 DisplayStyle = ToolStripItemDisplayStyle.Text,
                 ForeColor = Theme.TextPrimary,
                 Font = Theme.FontRegular,
-                AutoToolTip = false,
-                Margin = new Padding(0, 4, 4, 4),
-                Padding = new Padding(10, 0, 6, 0)
+                AutoToolTip = false
             };
 
             btnLimparFiltros = new ToolStripButton("Limpar Filtros")
@@ -978,9 +1005,7 @@ namespace CONTROLE_DE_PEDIDOS
                 Font = Theme.FontSmall,
                 AutoToolTip = false,
                 Visible = false,
-                Alignment = ToolStripItemAlignment.Right,
-                Margin = new Padding(0, 4, 4, 4),
-                Padding = new Padding(8, 0, 8, 0)
+                Alignment = ToolStripItemAlignment.Right
             };
 
             btnRefresh = new ToolStripButton("⟳ Atualizar")
@@ -988,11 +1013,26 @@ namespace CONTROLE_DE_PEDIDOS
                 DisplayStyle = ToolStripItemDisplayStyle.Text,
                 Font = Theme.FontRegular,
                 AutoToolTip = false,
-                Alignment = ToolStripItemAlignment.Right,
-                Margin = new Padding(0, 4, 4, 4),
-                Padding = new Padding(8, 0, 8, 0)
+                Alignment = ToolStripItemAlignment.Right
             };
             btnRefresh.Click += BtnRefresh_Click;
+
+            // Margens/paddings dos itens e o tamanho de imagem em pixels lógicos
+            Metrica(() =>
+            {
+                toolStripFiltros.ImageScalingSize = Dpi(16, 16);
+                lblFiltrar.Margin = Dpi(4, 0, 8, 0);
+                foreach (ToolStripItem item in new ToolStripItem[] { btnFiltroVendedor, btnFiltroRota, btnFiltroEtapa })
+                {
+                    item.Margin = Dpi(0, 4, 4, 4);
+                    item.Padding = Dpi(10, 0, 6, 0);
+                }
+                foreach (ToolStripItem item in new ToolStripItem[] { btnLimparFiltros, btnRefresh })
+                {
+                    item.Margin = Dpi(0, 4, 4, 4);
+                    item.Padding = Dpi(8, 0, 8, 0);
+                }
+            });
 
             toolStripFiltros.Items.Add(lblFiltrar);
             toolStripFiltros.Items.Add(btnFiltroVendedor);
@@ -1051,14 +1091,56 @@ namespace CONTROLE_DE_PEDIDOS
             Controls.Add(menuStrip);
 
             Resize += (_, _) => AtualizarLayoutCentralizado();
-            // PerMonitorV2: re-executa o layout manual ao mudar de monitor/DPI
-            // (Dpi() lê o DeviceDpi corrente a cada chamada)
-            DpiChanged += (_, _) => AtualizarLayoutCentralizado();
+            // PerMonitorV2: DPI mudou com o app aberto. O handler roda ANTES do
+            // reescalonamento do próprio WinForms; adiar garante que as medidas absolutas
+            // (Dpi() lê o DeviceDpi novo) sejam as últimas a valer.
+            DpiChanged += (_, _) => BeginInvoke(ReaplicarMetricasDpi);
+            // Janela criada num monitor/sessão cujo DPI difere do DPI de sistema: o handle
+            // já nasce no DPI real, e as medidas da montagem foram calculadas com o anterior.
+            HandleCreated += (_, _) =>
+            {
+                if (_dpiMontagem != DeviceDpi) BeginInvoke(ReaplicarMetricasDpi);
+            };
+            _dpiMontagem = DeviceDpi;
 
             ResumeLayout(false);
             PerformLayout();
             PosicionarElementosStatusBar();
             AtualizarLayoutCentralizado();
+        }
+
+        private int _dpiMontagem;
+
+        private void ReaplicarMetricasDpi()
+        {
+            if (IsDisposed) return;
+            _dpiMontagem = DeviceDpi;
+            SuspendLayout();
+            try
+            {
+                AjustarTamanhoMinimo();
+                foreach (var aplicar in _metricasDpi) aplicar();
+            }
+            finally
+            {
+                ResumeLayout(true);
+            }
+            PosicionarElementosStatusBar();
+            AtualizarLayoutCentralizado();
+        }
+
+        /// <summary>
+        /// Mínimo que ainda comporta a faixa superior (pendentes + detalhes) sem estourar o
+        /// container: ClientSize ≥ Dpi(MinContainerWidth) + padding. Limitado à área útil
+        /// da tela — a 175% numa tela de 1080 linhas o mínimo lógico não cabe, e um
+        /// MinimumSize maior que a tela empurraria a janela para fora dela.
+        /// </summary>
+        private void AjustarTamanhoMinimo()
+        {
+            // FromRectangle, não FromControl: este último cria o handle, e no construtor isso
+            // faz a janela ignorar o WindowState = Maximized.
+            var util = Screen.FromRectangle(Bounds).WorkingArea.Size;
+            MinimumSize = new Size(Math.Min(Dpi(1060), util.Width), Math.Min(Dpi(640), util.Height));
         }
 
         private void AtualizarLayoutCentralizado()
@@ -1130,14 +1212,14 @@ namespace CONTROLE_DE_PEDIDOS
 
         private void PosicionarElementosStatusBar()
         {
-            int leftMargin = 16;
+            int leftMargin = Dpi(16);
             int indicadorY = (statusBarPanel.Height - panelIndicador.Height) / 2;
             panelIndicador.Location = new Point(leftMargin, indicadorY);
 
             int lblY = (statusBarPanel.Height - lblStatusConexao.Height) / 2;
-            lblStatusConexao.Location = new Point(panelIndicador.Right + 8, lblY);
+            lblStatusConexao.Location = new Point(panelIndicador.Right + Dpi(8), lblY);
 
-            int rightMargin = 16;
+            int rightMargin = Dpi(16);
             int btnY = (statusBarPanel.Height - btnConfig.Height) / 2;
             btnConfig.Location = new Point(statusBarPanel.Width - btnConfig.Width - rightMargin, btnY);
         }
