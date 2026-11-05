@@ -8,6 +8,10 @@ namespace CONTROLE_DE_PEDIDOS
         private bool _dadosIniciaisCarregados;
         private HashSet<int> _ignorados = [];
         private HashSet<int> _aprovados = [];
+        // Já houve ao menos uma carga bem-sucedida de cada conjunto? Sem isso não há como
+        // filtrar os pendentes (aprovados/ignorados reapareceriam como pendentes).
+        private bool _ignoradosCarregados;
+        private bool _aprovadosCarregados;
         private bool _recarregando;
         /// <summary>Suprime DgvSelectionChanged enquanto o código mexe na seleção (refresh).</summary>
         private bool _suprimirSelectionChanged;
@@ -133,9 +137,14 @@ namespace CONTROLE_DE_PEDIDOS
             else Aplicar();
         }
 
-        private async Task CarregarIgnoradosAsync()
+        /// <summary>
+        /// Recarrega o conjunto de ignorados. Retorna false se ele não pôde ser atualizado
+        /// (controle fora ou erro): nesse caso o último conjunto conhecido é MANTIDO — zerar
+        /// fazia todos os ignorados reaparecerem como pendentes no grid de orçamentos.
+        /// </summary>
+        private async Task<bool> CarregarIgnoradosAsync()
         {
-            if (!_db.ControleConectado) return;
+            if (!_db.ControleConectado) return false;
 
             try
             {
@@ -151,20 +160,35 @@ namespace CONTROLE_DE_PEDIDOS
                 });
 
                 _ignorados = lista ?? [];
+                _ignoradosCarregados = true;
+                return true;
             }
             catch (Exception ex)
             {
-                Logger.Error("Erro ao carregar orçamentos ignorados", ex);
-                _ignorados = [];
+                Logger.Error("Erro ao carregar orçamentos ignorados (mantido o último conjunto conhecido)", ex);
+                return false;
             }
         }
 
         private async Task CarregarOrcamentosAsync()
         {
-            if (!_db.IntegraConectado) return;
+            if (!_db.IntegraConectado)
+            {
+                if (_dadosIniciaisCarregados) IndicarDesatualizado(lblContagem, true);
+                return;
+            }
 
-            await CarregarIgnoradosAsync();
-            await CarregarAprovadosAsync();
+            bool ignoradosOk = await CarregarIgnoradosAsync();
+            bool aprovadosOk = await CarregarAprovadosAsync();
+            // Conjuntos auxiliares velhos ainda filtram bem (com o controle fora ninguém
+            // aprova/ignora), mas o grid pode divergir do banco: marca como desatualizado.
+            bool auxiliaresOk = ignoradosOk && aprovadosOk;
+            if (!_ignoradosCarregados || !_aprovadosCarregados)
+            {
+                // Nunca carregados: sem filtro confiável, mantém o grid como está.
+                IndicarDesatualizado(lblContagem, true);
+                return;
+            }
 
             // Salvar estado atual para restaurar após reload
             int orcSelecionado = -1;
@@ -215,7 +239,10 @@ namespace CONTROLE_DE_PEDIDOS
                 string assinatura = string.Join("\n", dados.Select(o =>
                     $"{o.Orcamento}\u001F{o.Nome}\u001F{o.NomeFantasia}"));
                 if (assinatura == _assinaturaOrcamentos && dgvOrcamentos.DataSource != null)
+                {
+                    IndicarDesatualizado(lblContagem, !auxiliaresOk);
                     return;
+                }
                 _assinaturaOrcamentos = assinatura;
 
                 // Suprimir repaints intermediários durante a atualização
@@ -269,12 +296,13 @@ namespace CONTROLE_DE_PEDIDOS
                 return;
             }
 
-            IndicarDesatualizado(lblContagem, false);
+            IndicarDesatualizado(lblContagem, !auxiliaresOk);
         }
 
-        private async Task CarregarAprovadosAsync()
+        /// <summary>Mesma semântica de <see cref="CarregarIgnoradosAsync"/>.</summary>
+        private async Task<bool> CarregarAprovadosAsync()
         {
-            if (!_db.ControleConectado) return;
+            if (!_db.ControleConectado) return false;
 
             try
             {
@@ -290,17 +318,23 @@ namespace CONTROLE_DE_PEDIDOS
                 });
 
                 _aprovados = lista ?? [];
+                _aprovadosCarregados = true;
+                return true;
             }
             catch (Exception ex)
             {
-                Logger.Error("Erro ao carregar orçamentos aprovados", ex);
-                _aprovados = [];
+                Logger.Error("Erro ao carregar orçamentos aprovados (mantido o último conjunto conhecido)", ex);
+                return false;
             }
         }
 
         private async Task CarregarPedidosAsync()
         {
-            if (!_db.ControleConectado) return;
+            if (!_db.ControleConectado)
+            {
+                if (_dadosIniciaisCarregados) IndicarDesatualizado(lblContagemPedidos, true);
+                return;
+            }
 
             try
             {
@@ -412,7 +446,11 @@ namespace CONTROLE_DE_PEDIDOS
                 // comparar em memória antes evita pagar isso à toa em ~97% dos refreshes.
                 string assinatura = AssinaturaPedidos(dados);
                 if (assinatura == _assinaturaPedidos && dgvPedidos.DataSource != null)
+                {
+                    // Conteúdo igual ao da tela, mas veio do banco agora: está em dia.
+                    IndicarDesatualizado(lblContagemPedidos, false);
                     return;
+                }
                 _assinaturaPedidos = assinatura;
 
                 // Atualizar master list preservando referências existentes quando possível
@@ -868,7 +906,12 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 // Parar auto-refresh enquanto o Integra está fora
                 timerAutoRefresh.Stop();
+                // Os pendentes continuam na tela, mas não serão mais atualizados até a
+                // reconexão (que recarrega e limpa o indicativo).
+                if (_dadosIniciaisCarregados) IndicarDesatualizado(lblContagem, true);
             }
+            if (e.StatusControle == StatusConexao.Desconectado && _dadosIniciaisCarregados)
+                IndicarDesatualizado(lblContagemPedidos, true);
             else if (e.StatusIntegra == StatusConexao.Conectado && _dadosIniciaisCarregados
                      && !timerAutoRefresh.Enabled)
             {
