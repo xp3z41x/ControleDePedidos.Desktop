@@ -1097,7 +1097,8 @@ namespace CONTROLE_DE_PEDIDOS
         /// (WHERE com todas as flags atuais). Retorna true se avançou; em conflito
         /// (0 linhas), avisa e recarrega o grid.
         /// </summary>
-        private async Task<bool> ExecutarAvancoStatusAsync(PedidoControlado pedido, string coluna)
+        private async Task<bool> ExecutarAvancoStatusAsync(PedidoControlado pedido, string coluna,
+            Func<IWin32Window>? ownerConflito = null)
         {
             var linhas = await _db.ExecutarControleComLinhasAsync(async conn =>
             {
@@ -1129,7 +1130,7 @@ namespace CONTROLE_DE_PEDIDOS
                 return true;
             }
 
-            MessageBox.Show(this, "O status deste pedido foi alterado por outro usuário.\nA tela será atualizada.",
+            MessageBox.Show(ownerConflito?.Invoke() ?? this, "O status deste pedido foi alterado por outro usuário.\nA tela será atualizada.",
                 "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             await RecarregarDadosAsync(recarregarOrcamentos: false);
             return false;
@@ -1544,7 +1545,12 @@ namespace CONTROLE_DE_PEDIDOS
             try
             {
                 if (!_db.ControleConectado) return;
-                await ExecutarAvancoStatusAsync(pedido, "em_separacao");
+                // ImpressaoRealConcluida dispara com o preview (modal) ainda aberto: o aviso
+                // de conflito precisa dele como owner, não do Form1 (invariante 5 — senão
+                // nasce mal-parentado). Resolvido só na hora de exibir, depois do await:
+                // se o preview já fechou, a janela ativa volta a ser o próprio Form1.
+                await ExecutarAvancoStatusAsync(pedido, "em_separacao",
+                    () => Form.ActiveForm is { IsDisposed: false } ativa ? ativa : this);
             }
             catch (Exception ex)
             {
