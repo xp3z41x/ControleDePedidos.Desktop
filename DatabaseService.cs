@@ -59,6 +59,9 @@ namespace CONTROLE_DE_PEDIDOS
         private readonly SynchronizationContext? _syncContext;
         private int _verificando;
         private bool _bancoControleGarantido;
+        /// <summary>1 = a próxima verificação publica StatusAlterado mesmo sem mudança
+        /// (após trocar a config o Form1 zera o estado e só recarrega ao receber o evento).</summary>
+        private int _forcarNotificacaoStatus;
 
         // --- LISTEN/NOTIFY: avisa as outras instâncias quando alguém grava algo ---
         private const string CanalMudancas = "cp_mudou";
@@ -149,8 +152,33 @@ namespace CONTROLE_DE_PEDIDOS
         public void IniciarEscutaMudancas()
         {
             if (_tarefaListener != null) return;
-            _ctsListener = new CancellationTokenSource();
-            _tarefaListener = Task.Run(() => LoopEscutaAsync(_ctsListener.Token));
+            // Token capturado AGORA: ler _ctsListener dentro da lambda pegaria null (ou
+            // o CTS de outro ciclo) se a escuta fosse parada/reiniciada antes do Task.Run rodar.
+            var cts = new CancellationTokenSource();
+            var token = cts.Token;
+            _ctsListener = cts;
+            _tarefaListener = Task.Run(() => LoopEscutaAsync(token));
+        }
+
+        /// <summary>
+        /// Encerra a escuta sem bloquear a UI. Usado ao trocar a configuração: a conexão
+        /// dedicada continuava no servidor/banco ANTIGO (o WaitAsync não volta sozinho),
+        /// e o IniciarEscutaMudancas seguinte não fazia nada porque a tarefa existia.
+        /// O Form1 religa a escuta quando a nova conexão é confirmada.
+        /// </summary>
+        private void CancelarEscutaMudancas()
+        {
+            var cts = _ctsListener;
+            var tarefa = _tarefaListener;
+            _ctsListener = null;
+            _tarefaListener = null;
+            if (cts == null) return;
+
+            try { cts.Cancel(); } catch { /* já descartado */ }
+            if (tarefa != null)
+                _ = tarefa.ContinueWith(_ => cts.Dispose(), TaskScheduler.Default);
+            else
+                cts.Dispose();
         }
 
         private async Task LoopEscutaAsync(CancellationToken ct)
@@ -254,6 +282,11 @@ namespace CONTROLE_DE_PEDIDOS
                 Logger.Error("Erro ao salvar config.ini", ex);
             }
             _bancoControleGarantido = false;
+            CancelarEscutaMudancas();
+            // O Form1 zera _dadosIniciaisCarregados e espera um StatusAlterado para
+            // recarregar. Se a conexão seguia igual (ex.: trocou só a Filial), nenhum
+            // evento saía e a tela ficava sem auto-refresh e sem notificações até reabrir.
+            Interlocked.Exchange(ref _forcarNotificacaoStatus, 1);
             _ = VerificarConexaoAsync();
         }
 
@@ -283,6 +316,9 @@ namespace CONTROLE_DE_PEDIDOS
                 bool mudou = novoIntegra != _statusIntegra || novoControle != _statusControle;
                 _statusIntegra = novoIntegra;
                 _statusControle = novoControle;
+
+                if (Interlocked.Exchange(ref _forcarNotificacaoStatus, 0) == 1)
+                    mudou = true;
 
                 if (mudou)
                 {
