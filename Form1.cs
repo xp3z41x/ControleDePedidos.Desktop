@@ -254,6 +254,8 @@ namespace CONTROLE_DE_PEDIDOS
                     dgvOrcamentos.SkipAutoAdjust = false;
                     dgvOrcamentos.ResumeLayout(true);
                 }
+
+                SincronizarDetalhesComSelecao(dgvOrcamentos);
             }
             catch (Exception ex)
             {
@@ -741,6 +743,8 @@ namespace CONTROLE_DE_PEDIDOS
                     lista.RemoveAt(i);
             }
             lblContagem.Text = $"{lista.Count} registro{(lista.Count != 1 ? "s" : "")}";
+            // Removendo a última linha o SelectionChanged chega sem item e o painel ficava no removido.
+            SincronizarDetalhesComSelecao(dgvOrcamentos);
         }
 
         private async void BtnIgnorar_Click(object? sender, EventArgs e)
@@ -1415,6 +1419,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private int _orcamentoDetalheAtual;
 
+        /// <summary>Grid cuja seleção o painel de detalhes está espelhando (o último em que o usuário selecionou).</summary>
+        private DataGridView? _gridDetalhe;
+
         private async void BtnImprimirSeparacao_Click(object? sender, EventArgs e)
         {
             using var acao = TentarIniciarAcao();
@@ -1839,7 +1846,37 @@ namespace CONTROLE_DE_PEDIDOS
             else if (sender == dgvPedidos && dgvPedidos.CurrentRow?.DataBoundItem is PedidoControlado ped)
                 orcamento = ped.Orcamento;
 
-            if (orcamento == null || orcamento == _orcamentoDetalheAtual) return;
+            if (orcamento == null) return;
+            _gridDetalhe = (DataGridView)sender!;
+            if (orcamento == _orcamentoDetalheAtual) return;
+            _orcamentoDetalheAtual = orcamento.Value;
+            _ = CarregarDetalhesAsync(orcamento.Value);
+        }
+
+        /// <summary>
+        /// Chamado depois de um refresh do <paramref name="grid"/> (que roda com
+        /// SelectionChanged suprimido). Se o pedido exibido sumiu e o grid pulou para
+        /// outra linha, o painel continuava mostrando o pedido antigo; agora acompanha a
+        /// linha corrente, ou é limpo se o grid ficou sem seleção. Só age se o painel está
+        /// espelhando este grid — o refresh do outro grid não rouba o painel.
+        /// </summary>
+        private void SincronizarDetalhesComSelecao(DataGridView grid)
+        {
+            if (_gridDetalhe != grid) return;
+
+            int? orcamento = grid.CurrentRow?.DataBoundItem switch
+            {
+                OrcamentoResumo o => o.Orcamento,
+                PedidoControlado p => p.Orcamento,
+                _ => null
+            };
+
+            if (orcamento == null)
+            {
+                if (_orcamentoDetalheAtual != 0) LimparDetalhes();
+                return;
+            }
+            if (orcamento == _orcamentoDetalheAtual) return;
             _orcamentoDetalheAtual = orcamento.Value;
             _ = CarregarDetalhesAsync(orcamento.Value);
         }
@@ -2124,6 +2161,8 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 _suprimirSelectionChanged = false;
             }
+
+            SincronizarDetalhesComSelecao(dgvPedidos);
 
             int total = _pedidosTodos.Count;
             int mostrados = filtrados.Count;
