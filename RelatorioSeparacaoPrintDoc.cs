@@ -270,12 +270,14 @@ namespace CONTROLE_DE_PEDIDOS
                 new RectangleF(x + larguraTotal * 0.62f, y, larguraTotal * 0.38f, 16), sfDireita);
             y += 16;
 
-            // Observação com wrap em até 3 linhas
+            // Observação com wrap em até 3 linhas. Teto pela MÉTRICA da fonte (3 linhas
+            // tipográficas completas): a constante 54 antiga deixava ~meia 4ª linha
+            // visível, cortada ao meio e sem reticências.
             if (!string.IsNullOrWhiteSpace(_cab.Observacao))
             {
                 string obs = $"OBS: {_cab.Observacao}";
                 using var sfObs = new StringFormat { Trimming = StringTrimming.EllipsisWord };
-                float alturaObs = Math.Min(54f,
+                float alturaObs = Math.Min(FontCabecalho.GetHeight(g) * 3f + 2f,
                     g.MeasureString(obs, FontCabecalho, (int)larguraTotal).Height + 2f);
                 g.DrawString(obs, FontCabecalho, Brushes.Black,
                     new RectangleF(x, y, larguraTotal, alturaObs), sfObs);

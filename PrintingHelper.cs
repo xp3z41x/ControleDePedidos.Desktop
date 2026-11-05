@@ -327,10 +327,14 @@ namespace CONTROLE_DE_PEDIDOS
         public static bool ImprimirDocumento(Form owner, PrintDocument doc, string contextoLog)
         {
             var ps = doc.PrinterSettings;
-            bool printToFileOriginal = ps.PrintToFile;
-            string printFileNameOriginal = ps.PrintFileName;
             var controllerOriginal = doc.PrintController;
             var cursorOriginal = owner.Cursor;
+            // DEVNAMES (driver/impressora/porta) de antes do redirecionamento. É o único
+            // jeito público de devolver PrintFileName ao valor original VAZIO: o setter
+            // de PrintFileName lança ArgumentNullException para "" — restaurar por ele
+            // estourava no finally de TODA impressão em PORTPROMPT (o PDF era gerado,
+            // mas o usuário via erro e o controller/ativação não eram restaurados).
+            IntPtr devnamesOriginal = IntPtr.Zero;
             try
             {
                 if (!ps.PrintToFile && PortaPedeArquivo(ps.PrinterName))
@@ -352,6 +356,7 @@ namespace CONTROLE_DE_PEDIDOS
                         Logger.Info($"{contextoLog}: salvamento em arquivo cancelado pelo usuário");
                         return false;
                     }
+                    devnamesOriginal = ps.GetHdevnames();
                     ps.PrintToFile = true;
                     ps.PrintFileName = salvar.FileName;
                     Logger.Info($"{contextoLog}: porta PORTPROMPT — saída direta em '{salvar.FileName}'");
@@ -373,9 +378,24 @@ namespace CONTROLE_DE_PEDIDOS
             finally
             {
                 owner.Cursor = cursorOriginal;
-                // Restaura: senão um próximo "Imprimir em arquivo" reaproveitaria o caminho do PDF.
-                ps.PrintToFile = printToFileOriginal;
-                ps.PrintFileName = printFileNameOriginal;
+                // Restaura (só se redirecionamos): senão um próximo "Imprimir em arquivo"
+                // reaproveitaria o caminho do PDF. Nunca pode lançar daqui.
+                if (devnamesOriginal != IntPtr.Zero)
+                {
+                    try
+                    {
+                        ps.SetHdevnames(devnamesOriginal);
+                        ps.PrintToFile = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warn($"{contextoLog}: falha ao restaurar saída da impressora: {ex.Message}");
+                    }
+                    finally
+                    {
+                        NativeMethods.GlobalFree(devnamesOriginal);
+                    }
+                }
                 doc.PrintController = controllerOriginal;
                 // Garantia extra: devolve o primeiro plano ao nosso diálogo.
                 if (!owner.IsDisposed) owner.Activate();
@@ -453,6 +473,10 @@ namespace CONTROLE_DE_PEDIDOS
 
             [System.Runtime.InteropServices.DllImport("winspool.drv", SetLastError = true)]
             public static extern bool ClosePrinter(IntPtr hPrinter);
+
+            // PrinterSettings.GetHdevnames aloca com GlobalAlloc: liberar com GlobalFree.
+            [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+            public static extern IntPtr GlobalFree(IntPtr hMem);
         }
 
         /// <summary>
