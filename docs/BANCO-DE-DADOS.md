@@ -47,7 +47,7 @@ Gravação **atômica** com o DELETE do pedido (transação; INSERT só se o DEL
 
 ### Canal `cp_mudou` (LISTEN/NOTIFY)
 
-- Payload: `"<motivo>|<IdInstancia>"` — motivos: `pedidos` (automático via `ExecutarControleComLinhasAsync` quando rowcount > 0), `ignorados`, `exclusao`.
+- Payload: `"<motivo>|<IdInstancia>"` — motivos: `pedidos` (automático via `ExecutarControleComLinhasAsync` quando rowcount > 0), `ignorados`, `exclusao`, `historico` (limpeza do histórico de exclusões).
 - Instância emissora descarta o próprio eco (sufixo do payload).
 - Escuta em conexão dedicada `Pooling=false` (obrigatório) + `KeepAlive=30`.
 

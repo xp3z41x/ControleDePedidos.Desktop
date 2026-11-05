@@ -554,7 +554,8 @@ namespace CONTROLE_DE_PEDIDOS
         /// sem avisar (são 8 fluxos diferentes: avançar, retornar, travar, destravar,
         /// assumir, largar, alterar rota, excluir).
         /// </summary>
-        public async Task<int> ExecutarControleComLinhasAsync(Func<NpgsqlConnection, Task<int>> operacao)
+        public async Task<int> ExecutarControleComLinhasAsync(Func<NpgsqlConnection, Task<int>> operacao,
+                                                             string motivo = "pedidos")
         {
             if (!ControleConectado)
                 throw new InvalidOperationException($"Sem conexão com o banco {_config.BancoControle}.");
@@ -567,7 +568,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
 
             if (linhas > 0)
-                await NotificarMudancaAsync("pedidos").ConfigureAwait(false);
+                await NotificarMudancaAsync(motivo).ConfigureAwait(false);
 
             return linhas;
         }
@@ -809,7 +810,8 @@ namespace CONTROLE_DE_PEDIDOS
         /// <summary>
         /// DELETE destrutivo: remove definitivamente do historico_exclusoes
         /// todos os registros com data_exclusao anterior ao corte informado.
-        /// Retorna o numero de linhas removidas.
+        /// Retorna o numero de linhas removidas. Notifica as outras instâncias (invariante
+        /// 10) via ExecutarControleComLinhasAsync, com motivo próprio no payload.
         /// </summary>
         public async Task<int> LimparHistoricoExclusoesAntigoAsync(DateTime corte)
         {
@@ -819,7 +821,7 @@ namespace CONTROLE_DE_PEDIDOS
                 cmd.CommandText = "DELETE FROM historico_exclusoes WHERE data_exclusao < @corte";
                 cmd.Parameters.AddWithValue("corte", corte);
                 return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-            }).ConfigureAwait(false);
+            }, motivo: "historico").ConfigureAwait(false);
         }
 
         /// <summary>
