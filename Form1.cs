@@ -328,6 +328,7 @@ namespace CONTROLE_DE_PEDIDOS
                 var dados = lista ?? [];
 
                 // Buscar pedido_venda + vendedor do integra para cada pedido
+                bool enriquecido = false;
                 if (dados.Count > 0 && _db.IntegraConectado)
                 {
                     try
@@ -372,11 +373,29 @@ namespace CONTROLE_DE_PEDIDOS
                                     p.ConferidoIntegra = info.conferidoIntegra;
                                 }
                             }
+                            enriquecido = true;
                         }
                     }
                     catch (Exception ex)
                     {
                         Logger.Warn("Erro ao buscar pedido_venda/vendedor", ex);
+                    }
+                }
+
+                // Integra fora/falhou: manter o último enriquecimento conhecido. Sem isso o
+                // CopiarDe zerava PedidoVenda/Vendedor/ConferidoIntegra — faturados viravam
+                // "NÃO", o filtro por vendedor esvaziava o grid, e com ConferidoIntegra
+                // falso o Avançar gravava conferência MANUAL num pedido que o Integra já
+                // conferiu.
+                if (!enriquecido && dados.Count > 0 && _pedidosTodos.Count > 0)
+                {
+                    var anteriores = _pedidosTodos.ToDictionary(p => p.Orcamento);
+                    foreach (var p in dados)
+                    {
+                        if (!anteriores.TryGetValue(p.Orcamento, out var ant)) continue;
+                        p.PedidoVenda = ant.PedidoVenda;
+                        p.Vendedor = ant.Vendedor;
+                        p.ConferidoIntegra = ant.ConferidoIntegra;
                     }
                 }
 
