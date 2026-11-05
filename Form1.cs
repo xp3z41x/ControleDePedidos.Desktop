@@ -812,6 +812,12 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 await GarantirTabelasSeguroAsync();
                 await RecarregarDadosAsync(recarregarOrcamentos: false);
+                // Salvar a configuração cancela a escuta (DatabaseService.AtualizarConfig) e
+                // o status é renotificado com _dadosIniciaisCarregados ainda true: sem religar
+                // aqui, o LISTEN morria e as outras instâncias só eram vistas pelo timer.
+                // Idempotente: não faz nada se a escuta já está ativa.
+                if (e.StatusIntegra == StatusConexao.Conectado)
+                    _db.IniciarEscutaMudancas();
             }
 
             if (e.StatusIntegra == StatusConexao.Desconectado)
