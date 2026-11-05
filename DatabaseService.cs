@@ -9,6 +9,27 @@ namespace CONTROLE_DE_PEDIDOS
         Desconectado
     }
 
+    /// <summary>Resultado de <see cref="DatabaseService.ExcluirPedidoComHistoricoAsync"/>.</summary>
+    public enum ResultadoExclusao
+    {
+        Excluido,
+        /// <summary>A linha não existe mais: outro usuário já excluiu.</summary>
+        JaExcluido,
+        /// <summary>A linha existe com estado diferente do esperado: outro usuário alterou.</summary>
+        Alterado
+    }
+
+    /// <summary>
+    /// Resultado do botão "Testar" do ConfigDialog, um item por banco. Erro null = OK.
+    /// <paramref name="ControleSeraCriado"/>: o banco de controle ainda não existe, mas o
+    /// servidor responde — o app o cria ao conectar, então não conta como falha.
+    /// </summary>
+    public sealed record ResultadoTesteConexao(string? ErroIntegra, string? ErroControle, bool ControleSeraCriado)
+    {
+        public bool IntegraOk => ErroIntegra == null;
+        public bool ControleOk => ErroControle == null || ControleSeraCriado;
+    }
+
     public class StatusConexaoEventArgs : EventArgs
     {
         public StatusConexao StatusIntegra { get; }
@@ -306,18 +327,21 @@ namespace CONTROLE_DE_PEDIDOS
 
             try
             {
-                bool okIntegra = await TestarConexaoAsync(_config.ConnectionStringIntegra).ConfigureAwait(false);
-                bool okControle = false;
-
-                if (okIntegra)
+                // Os dois bancos são testados de forma INDEPENDENTE (e em paralelo). Antes o
+                // controle só era testado se o Integra respondesse: com o Integra fora o app
+                // inteiro ficava "Desconectado", inclusive as telas que só usam o controle.
+                var tarefaIntegra = TestarConexaoAsync(_config.ConnectionStringIntegra);
+                var tarefaControle = Task.Run(async () =>
                 {
                     // Só marca como garantido se deu certo: antes o true era gravado mesmo
                     // após falha (o catch interno zerava e a linha seguinte sobrescrevia),
                     // e o banco nunca mais era criado até trocar a configuração.
                     if (!_bancoControleGarantido)
                         _bancoControleGarantido = await GarantirBancoControleAsync().ConfigureAwait(false);
-                    okControle = await TestarConexaoAsync(_config.ConnectionStringControle).ConfigureAwait(false);
-                }
+                    return await TestarConexaoAsync(_config.ConnectionStringControle).ConfigureAwait(false);
+                });
+                bool okIntegra = await tarefaIntegra.ConfigureAwait(false);
+                bool okControle = await tarefaControle.ConfigureAwait(false);
 
                 var novoIntegra = okIntegra ? StatusConexao.Conectado : StatusConexao.Desconectado;
                 var novoControle = okControle ? StatusConexao.Conectado : StatusConexao.Desconectado;
@@ -336,6 +360,8 @@ namespace CONTROLE_DE_PEDIDOS
                         mensagem = $"Conectado - {_config.ServidorIP}";
                     else if (okIntegra)
                         mensagem = $"Parcial - {_config.ServidorIP} (sem {_config.BancoControle})";
+                    else if (okControle)
+                        mensagem = $"Parcial - {_config.ServidorIP} (sem {_config.BancoIntegra})";
                     else
                         mensagem = $"Desconectado - {_config.ServidorIP}";
 
@@ -528,7 +554,8 @@ namespace CONTROLE_DE_PEDIDOS
         /// sem avisar (são 8 fluxos diferentes: avançar, retornar, travar, destravar,
         /// assumir, largar, alterar rota, excluir).
         /// </summary>
-        public async Task<int> ExecutarControleComLinhasAsync(Func<NpgsqlConnection, Task<int>> operacao)
+        public async Task<int> ExecutarControleComLinhasAsync(Func<NpgsqlConnection, Task<int>> operacao,
+                                                             string motivo = "pedidos")
         {
             if (!ControleConectado)
                 throw new InvalidOperationException($"Sem conexão com o banco {_config.BancoControle}.");
@@ -541,7 +568,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
 
             if (linhas > 0)
-                await NotificarMudancaAsync("pedidos").ConfigureAwait(false);
+                await NotificarMudancaAsync(motivo).ConfigureAwait(false);
 
             return linhas;
         }
@@ -550,9 +577,9 @@ namespace CONTROLE_DE_PEDIDOS
         // HISTORICO DE EXCLUSOES
         // Lookup de NFes no integra (best-effort) + exclusao atomica
         // (DELETE pedidos_controlados + INSERT historico_exclusoes) em
-        // transacao local. Retorna linhas afetadas pelo DELETE — 0 indica
-        // conflito de concorrencia (outro usuario ja excluiu) e nesse caso
-        // o historico NAO recebe registro falso.
+        // transacao local, com locking otimista. Conflito (outro usuario ja
+        // excluiu ou alterou o pedido) e devolvido como ResultadoExclusao e
+        // nesse caso o historico NAO recebe registro falso.
         // =====================================================================
 
         /// <summary>
@@ -605,11 +632,15 @@ namespace CONTROLE_DE_PEDIDOS
 
         /// <summary>
         /// Executa DELETE do pedido em pedidos_controlados e INSERT no historico
-        /// atomicamente numa transacao. Retorna linhas afetadas pelo DELETE.
-        /// Se DELETE retornar 0 (conflito de concorrencia), o INSERT e pulado —
-        /// historico nao recebe registro falso.
+        /// atomicamente numa transacao, com locking otimista: o DELETE só acontece se a
+        /// linha ainda tiver o estado que a tela mostrava (flags de status + rota) — o
+        /// mesmo padrão dos UPDATEs. Antes, um pedido que outro operador travou ou pôs em
+        /// faturamento entre o último refresh e o clique era apagado mesmo assim.
+        /// Em conflito o INSERT é pulado (histórico não recebe registro falso) e o retorno
+        /// diz se a linha sumiu (<see cref="ResultadoExclusao.JaExcluido"/>) ou mudou
+        /// (<see cref="ResultadoExclusao.Alterado"/>).
         /// </summary>
-        public async Task<int> ExcluirPedidoComHistoricoAsync(ExclusaoRegistro reg)
+        public async Task<ResultadoExclusao> ExcluirPedidoComHistoricoAsync(ExclusaoRegistro reg)
         {
             if (!ControleConectado)
                 throw new InvalidOperationException($"Sem conexão com o banco {_config.BancoControle}.");
@@ -619,20 +650,30 @@ namespace CONTROLE_DE_PEDIDOS
             using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
             try
             {
-                // RETURNING: o histórico registra o estado REAL da linha apagada. O `reg`
-                // vem da tela, que pode estar defasada (outro operador avançou/travou o
-                // pedido entre o último refresh e o clique) — a auditoria gravava um
-                // status que o pedido já não tinha. Só o vendedor, pedido_venda e NF-e
+                // WHERE com o estado esperado (locking otimista). RETURNING: o histórico
+                // registra a linha REAL apagada (cliente/nome fantasia podem ter sido
+                // reenriquecidos depois do refresh da tela). Vendedor, pedido_venda e NF-e
                 // (que não existem nesta tabela) continuam vindo do `reg`.
                 int linhas = 0;
                 using (var cmdDel = conn.CreateCommand())
                 {
                     cmdDel.Transaction = tx;
                     cmdDel.CommandText = @"
-                        DELETE FROM pedidos_controlados WHERE orcamento = @orc
+                        DELETE FROM pedidos_controlados
+                         WHERE orcamento = @orc
+                           AND rota = @rota
+                           AND aprovado = @apr AND em_separacao = @sep AND conferido = @cnf
+                           AND liberado = @lib AND travado = @trv AND em_faturamento = @fat
                         RETURNING cliente, nome_fantasia, rota,
                                   aprovado, em_separacao, conferido, liberado, travado, em_faturamento";
                     cmdDel.Parameters.AddWithValue("orc", reg.Orcamento);
+                    cmdDel.Parameters.AddWithValue("rota", reg.Rota ?? "");
+                    cmdDel.Parameters.AddWithValue("apr", reg.Aprovado);
+                    cmdDel.Parameters.AddWithValue("sep", reg.EmSeparacao);
+                    cmdDel.Parameters.AddWithValue("cnf", reg.Conferido);
+                    cmdDel.Parameters.AddWithValue("lib", reg.Liberado);
+                    cmdDel.Parameters.AddWithValue("trv", reg.Travado);
+                    cmdDel.Parameters.AddWithValue("fat", reg.EmFaturamento);
                     using var rd = await cmdDel.ExecuteReaderAsync().ConfigureAwait(false);
                     if (await rd.ReadAsync().ConfigureAwait(false))
                     {
@@ -658,9 +699,24 @@ namespace CONTROLE_DE_PEDIDOS
                     }
                 }
 
-                if (linhas > 0)
+                if (linhas == 0)
                 {
-                    using var cmdIns = conn.CreateCommand();
+                    // Nada apagado: a linha sumiu ou mudou de estado? Lido na mesma
+                    // transação só para dar a mensagem certa ao operador.
+                    bool existe;
+                    using (var cmdExiste = conn.CreateCommand())
+                    {
+                        cmdExiste.Transaction = tx;
+                        cmdExiste.CommandText = "SELECT 1 FROM pedidos_controlados WHERE orcamento = @orc";
+                        cmdExiste.Parameters.AddWithValue("orc", reg.Orcamento);
+                        existe = await cmdExiste.ExecuteScalarAsync().ConfigureAwait(false) != null;
+                    }
+                    await tx.RollbackAsync().ConfigureAwait(false);
+                    return existe ? ResultadoExclusao.Alterado : ResultadoExclusao.JaExcluido;
+                }
+
+                using (var cmdIns = conn.CreateCommand())
+                {
                     cmdIns.Transaction = tx;
                     cmdIns.CommandText = @"
                         INSERT INTO historico_exclusoes
@@ -690,11 +746,8 @@ namespace CONTROLE_DE_PEDIDOS
                 }
 
                 await tx.CommitAsync().ConfigureAwait(false);
-
-                if (linhas > 0)
-                    await NotificarMudancaAsync("exclusao").ConfigureAwait(false);
-
-                return linhas;
+                await NotificarMudancaAsync("exclusao").ConfigureAwait(false);
+                return ResultadoExclusao.Excluido;
             }
             catch
             {
@@ -757,7 +810,8 @@ namespace CONTROLE_DE_PEDIDOS
         /// <summary>
         /// DELETE destrutivo: remove definitivamente do historico_exclusoes
         /// todos os registros com data_exclusao anterior ao corte informado.
-        /// Retorna o numero de linhas removidas.
+        /// Retorna o numero de linhas removidas. Notifica as outras instâncias (invariante
+        /// 10) via ExecutarControleComLinhasAsync, com motivo próprio no payload.
         /// </summary>
         public async Task<int> LimparHistoricoExclusoesAntigoAsync(DateTime corte)
         {
@@ -767,22 +821,48 @@ namespace CONTROLE_DE_PEDIDOS
                 cmd.CommandText = "DELETE FROM historico_exclusoes WHERE data_exclusao < @corte";
                 cmd.Parameters.AddWithValue("corte", corte);
                 return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-            }).ConfigureAwait(false);
+            }, motivo: "historico").ConfigureAwait(false);
         }
 
-        public async Task<bool> TestarConexao(AppConfig configTeste)
+        /// <summary>
+        /// Botão "Testar" do ConfigDialog: testa os DOIS bancos com a config digitada, sem
+        /// alterar nada. Antes só o Integra era testado — erro no nome do banco de controle
+        /// passava no teste. Banco de controle inexistente com o servidor acessível não é
+        /// erro: <see cref="GarantirBancoControleAsync"/> o cria ao conectar.
+        /// </summary>
+        public async Task<ResultadoTesteConexao> TestarConexao(AppConfig configTeste)
         {
-            try
+            var tarefaIntegra = TestarConexaoComErroAsync(configTeste.ConnectionStringIntegra);
+            var tarefaControle = TestarConexaoComErroAsync(configTeste.ConnectionStringControle);
+            string? erroIntegra = await tarefaIntegra.ConfigureAwait(false);
+            string? erroControle = await tarefaControle.ConfigureAwait(false);
+
+            bool controleSeraCriado = false;
+            if (erroControle != null)
             {
-                return await TestarConexaoAsync(configTeste.ConnectionStringIntegra).ConfigureAwait(false);
+                try
+                {
+                    await using var conn = new NpgsqlConnection(configTeste.ConnectionStringServidor);
+                    await conn.OpenAsync().ConfigureAwait(false);
+                    await using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT 1 FROM pg_database WHERE datname = @nome";
+                    cmd.Parameters.AddWithValue("nome", configTeste.BancoControle);
+                    controleSeraCriado = await cmd.ExecuteScalarAsync().ConfigureAwait(false) == null;
+                }
+                catch
+                {
+                    // Servidor inacessível também pelo banco postgres: fica o erro original.
+                }
             }
-            catch
-            {
-                return false;
-            }
+
+            return new ResultadoTesteConexao(erroIntegra, erroControle, controleSeraCriado);
         }
 
-        private static async Task<bool> TestarConexaoAsync(string connectionString)
+        private static async Task<bool> TestarConexaoAsync(string connectionString) =>
+            await TestarConexaoComErroAsync(connectionString).ConfigureAwait(false) == null;
+
+        /// <summary>Abre a conexão e roda SELECT 1. Devolve null se OK ou a mensagem de erro.</summary>
+        private static async Task<string?> TestarConexaoComErroAsync(string connectionString)
         {
             try
             {
@@ -791,11 +871,11 @@ namespace CONTROLE_DE_PEDIDOS
                 await using var cmd = conn.CreateCommand();
                 cmd.CommandText = "SELECT 1";
                 await cmd.ExecuteScalarAsync().ConfigureAwait(false);
-                return true;
+                return null;
             }
-            catch
+            catch (Exception ex)
             {
-                return false;
+                return ex.Message;
             }
         }
 

@@ -10,7 +10,7 @@ Três cards em um container centralizado e responsivo:
 2. **Detalhes do Orçamento** (faixa superior, direita) — dados do orçamento selecionado em qualquer um dos grids.
 3. **Controle de Pedidos** (largura total, embaixo) — os pedidos sob gestão, com o pipeline de status.
 
-Status bar: pill de conexão (verde "Conectado - IP" / vermelho "Desconectado") + botão **Configurações**.
+Status bar: pill de conexão (verde "Conectado - IP" / amarelo "Parcial - IP (sem <banco>)" quando só um dos bancos responde / vermelho "Desconectado") + botão **Configurações**. Os dois bancos são testados de forma independente: com o Integra fora e o controle no ar, as telas que só usam o controle (Histórico de Exclusões, rotas, Exclusão em Massa etc.) continuam funcionando.
 
 Menu: **ROTAS** → Cadastro de Rotas · **PEDIDOS** → Exclusão em Massa, Histórico de Exclusões · **RELATÓRIOS** → Relatório de Carga, Relatório de NF-e, Imprimir por Orçamento... (Ctrl+P) · **OBSERVAÇÃO** → Corrigir Observação.
 
@@ -70,7 +70,7 @@ Mini-janela para imprimir **qualquer orçamento da filial** — inclusive antigo
 
 - **Cadastro de Rotas**: CRUD simples (adicionar com Enter, excluir com confirmação). Nome único (violação → "Já existe uma rota com esse nome"). Excluir rota não afeta pedidos que a usam (texto livre).
 - **Ignorados**: lista a lixeira (com cliente/cidade/UF do Integra); **Restaurar Selecionado** devolve o orçamento à lista de pendentes. Sem exclusão definitiva.
-- **Exclusão em Massa**: grid com checkboxes + atalhos Marcar Todos / Desmarcar / **Marcar Faturados** / **Marcar Rotas** (multi-seleção com "(Sem rota)"). Confirmação destrutiva única; execução item a item com auditoria (tipo MASSA) e relatório final (excluídos / conflitos / erros).
+- **Exclusão em Massa**: grid com checkboxes + atalhos Marcar Todos / Desmarcar / **Marcar Faturados** / **Marcar Rotas** (multi-seleção com "(Sem rota)"). Confirmação destrutiva única; execução item a item com auditoria (tipo MASSA) e relatório final (excluídos / já excluídos por outro usuário / alterados por outro usuário — não excluídos / erros).
 - **Histórico de Exclusões**: consulta append-only — DATA, TIPO (MANUAL/MASSA), ORÇAMENTO, STATUS no momento, CLIENTE, FANTASIA, ROTA, VENDEDOR, PED. VENDA, NFE, USUÁRIO (Windows). Busca instantânea multi-campo (10 campos, em memória). Botão **"Excluir histórico com mais de 3 meses"** (manual, com confirmação de irreversibilidade).
 - **Relatório de Carga**: romaneio de entrega — seleção por checkbox/rota, saída ordenada por Cidade→Cliente, colunas com Nº pedido/volumes e coluna ASSINATURA em branco para o recebedor; totais de pedidos e volumes no rodapé. Preview + impressão A4 paisagem.
 - **Relatório de NF-e**: correlaciona pedidos controlados com notas fiscais (via `estmov` na Filial Fiscal); saída ordenada por Cliente com coluna CONFERIDO em branco para marcação manual. Preview + impressão.
@@ -88,7 +88,7 @@ Mini-janela para imprimir **qualquer orçamento da filial** — inclusive antigo
 | CÓPIA DE PEDIDO | paisagem, ordenar alfabeticamente |
 | DADOS DA EMPRESA (CÓPIA DE PEDIDO) | Razão Social, CNPJ, IE, Endereço, Cidade/UF/CEP, Telefone, E-mail, WhatsApp — impressos no cabeçalho da Cópia; vazios são omitidos |
 
-Botão **Testar** valida a conexão antes de salvar. O `config.ini` é por máquina: no servidor RDS, preencher uma vez vale para todos os operadores.
+Botão **Testar** valida a conexão com os **dois** bancos antes de salvar e reporta cada um (Integra / controle; banco de controle inexistente com o servidor acessível aparece como "será criado"). A senha é gravada e lida sem `Trim` (espaços nas pontas são preservados); os demais campos são aparados. O `config.ini` é por máquina: no servidor RDS, preencher uma vez vale para todos os operadores.
 
 ## Comportamentos transversais
 

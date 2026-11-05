@@ -20,7 +20,7 @@ DDL em `DatabaseService.GarantirTabelasAsync` — idempotente (`CREATE TABLE IF 
 
 Não existe coluna `faturado`: o estado Faturado deriva de `estorc.pedido_venda > 0` no Integra. Nenhum índice além da PK.
 
-Todo UPDATE usa **locking otimista** — o `WHERE` inclui o estado esperado completo (`travado=FALSE AND em_faturamento=FALSE AND aprovado=@ AND em_separacao=@ AND conferido=@ AND liberado=@`); rowcount 0 = conflito.
+Todo UPDATE usa **locking otimista** — o `WHERE` inclui o estado esperado completo (`travado=FALSE AND em_faturamento=FALSE AND aprovado=@ AND em_separacao=@ AND conferido=@ AND liberado=@`); rowcount 0 = conflito. A exclusão (`ExcluirPedidoComHistoricoAsync`) segue o mesmo padrão no `DELETE` (flags + `rota`).
 
 ### `orcamentos_ignorados`
 
@@ -47,7 +47,7 @@ Gravação **atômica** com o DELETE do pedido (transação; INSERT só se o DEL
 
 ### Canal `cp_mudou` (LISTEN/NOTIFY)
 
-- Payload: `"<motivo>|<IdInstancia>"` — motivos: `pedidos` (automático via `ExecutarControleComLinhasAsync` quando rowcount > 0), `ignorados`, `exclusao`.
+- Payload: `"<motivo>|<IdInstancia>"` — motivos: `pedidos` (automático via `ExecutarControleComLinhasAsync` quando rowcount > 0), `ignorados`, `exclusao`, `historico` (limpeza do histórico de exclusões).
 - Instância emissora descarta o próprio eco (sufixo do payload).
 - Escuta em conexão dedicada `Pooling=false` (obrigatório) + `KeepAlive=30`.
 

@@ -835,10 +835,12 @@ namespace CONTROLE_DE_PEDIDOS
                 await RecarregarDadosAsync();
             }
 
+            // Os bancos agora são testados de forma independente: só um fora = "Parcial"
+            // (amarelo); vermelho apenas com os dois fora.
             StatusConexao pior;
-            if (e.StatusIntegra == StatusConexao.Desconectado || e.StatusControle == StatusConexao.Desconectado)
+            if (e.StatusIntegra == StatusConexao.Desconectado && e.StatusControle == StatusConexao.Desconectado)
                 pior = StatusConexao.Desconectado;
-            else if (e.StatusIntegra == StatusConexao.Verificando || e.StatusControle == StatusConexao.Verificando)
+            else if (e.StatusIntegra != StatusConexao.Conectado || e.StatusControle != StatusConexao.Conectado)
                 pior = StatusConexao.Verificando;
             else
                 pior = StatusConexao.Conectado;
@@ -948,9 +950,9 @@ namespace CONTROLE_DE_PEDIDOS
                     EmFaturamento: pedido.EmFaturamento,
                     TipoExclusao: ExclusaoRegistro.TipoManual);
 
-                var linhas = await _db.ExcluirPedidoComHistoricoAsync(reg);
+                var resultado = await _db.ExcluirPedidoComHistoricoAsync(reg);
 
-                if (linhas > 0)
+                if (resultado == ResultadoExclusao.Excluido)
                 {
                     InvalidarRecargaEmAndamento();
                     _pedidosTodos.RemoveAll(p => p.Orcamento == pedido.Orcamento);
@@ -960,7 +962,10 @@ namespace CONTROLE_DE_PEDIDOS
                 }
                 else
                 {
-                    MessageBox.Show(this, "Este pedido já foi excluído por outro usuário.\nA tela será atualizada.",
+                    var texto = resultado == ResultadoExclusao.Alterado
+                        ? "Este pedido foi alterado por outro usuário e NÃO foi excluído.\nA tela será atualizada; confira o novo estado antes de excluir."
+                        : "Este pedido já foi excluído por outro usuário.\nA tela será atualizada.";
+                    MessageBox.Show(this, texto,
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     await RecarregarDadosAsync();
                 }
