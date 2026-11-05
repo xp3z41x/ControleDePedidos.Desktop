@@ -608,22 +608,22 @@ namespace CONTROLE_DE_PEDIDOS
                     InvalidarRecargaEmAndamento();
                     _aprovados.Add(orc.Orcamento);
 
-                    // Remove do grid de orçamentos
-                    if (dgvOrcamentos.DataSource is SortableBindingList<OrcamentoResumo> listaOrcamentos)
-                    {
-                        listaOrcamentos.Remove(orc);
-                        lblContagem.Text = $"{listaOrcamentos.Count} registro{(listaOrcamentos.Count != 1 ? "s" : "")}";
-                    }
+                    RemoverOrcamentoDoGrid(orc.Orcamento);
 
-                    // Adiciona na master list (Vendedor será preenchido no próximo refresh)
-                    var novoPedido = new PedidoControlado
+                    // Adiciona na master list (Vendedor será preenchido no próximo refresh).
+                    // Um refresh concluído durante o await pode já tê-lo trazido do banco:
+                    // inserir de novo duplicaria a chave e o ToDictionary do rebind lançaria.
+                    if (!_pedidosTodos.Any(p => p.Orcamento == orc.Orcamento))
                     {
-                        Orcamento = orc.Orcamento,
-                        Cliente = orc.Nome,
-                        NomeFantasia = orc.NomeFantasia,
-                        Rota = dialog.RotaSelecionada
-                    };
-                    _pedidosTodos.Insert(0, novoPedido);
+                        var novoPedido = new PedidoControlado
+                        {
+                            Orcamento = orc.Orcamento,
+                            Cliente = orc.Nome,
+                            NomeFantasia = orc.NomeFantasia,
+                            Rota = dialog.RotaSelecionada
+                        };
+                        _pedidosTodos.Insert(0, novoPedido);
+                    }
                     AtualizarOpcoesDropdowns();
                     AplicarFiltros();
                 }
@@ -639,6 +639,24 @@ namespace CONTROLE_DE_PEDIDOS
                 MessageBox.Show(this, $"Erro ao aprovar pedido: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        /// <summary>
+        /// Remove o orçamento do grid de pendentes pela CHAVE. O objeto capturado no
+        /// clique pode não estar mais na lista: um refresh durante o diálogo/MessageBox
+        /// troca o DataSource por objetos novos, e Remove(objeto) por referência virava
+        /// no-op — a linha controlada/ignorada continuava visível até o próximo timer.
+        /// </summary>
+        private void RemoverOrcamentoDoGrid(int orcamento)
+        {
+            if (dgvOrcamentos.DataSource is not SortableBindingList<OrcamentoResumo> lista) return;
+
+            for (int i = lista.Count - 1; i >= 0; i--)
+            {
+                if (lista[i].Orcamento == orcamento)
+                    lista.RemoveAt(i);
+            }
+            lblContagem.Text = $"{lista.Count} registro{(lista.Count != 1 ? "s" : "")}";
         }
 
         private async void BtnIgnorar_Click(object? sender, EventArgs e)
@@ -671,11 +689,7 @@ namespace CONTROLE_DE_PEDIDOS
                 // Atualiza o estado local e a grid manualmente
                 InvalidarRecargaEmAndamento();
                 _ignorados.Add(orc.Orcamento);
-                if (dgvOrcamentos.DataSource is SortableBindingList<OrcamentoResumo> listaOrcamentos)
-                {
-                    listaOrcamentos.Remove(orc);
-                    lblContagem.Text = $"{listaOrcamentos.Count} registro{(listaOrcamentos.Count != 1 ? "s" : "")}";
-                }
+                RemoverOrcamentoDoGrid(orc.Orcamento);
             }
             catch (Exception ex)
             {
