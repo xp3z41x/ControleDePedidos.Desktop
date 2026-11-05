@@ -8,6 +8,7 @@ namespace CONTROLE_DE_PEDIDOS
         private TextBox txtObservacao = null!;
         private Button btnGravar = null!;
         private Button btnCancelar = null!;
+        private bool _gravando;
 
         public CorrigirObservacaoDialog()
         {
@@ -158,6 +159,7 @@ namespace CONTROLE_DE_PEDIDOS
 
             btnGravar.Enabled = false;
             btnCancelar.Enabled = false;
+            _gravando = true;
             try
             {
                 int linhas = await _db.AtualizarObservacaoEstmovAsync(pedido, observacao);
@@ -165,6 +167,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, $"{linhas} registro(s) atualizado(s).",
                         "Sucesso", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    _gravando = false; // libera o OnFormClosing para o Close() abaixo
                     DialogResult = DialogResult.OK;
                     Close();
                 }
@@ -182,9 +185,21 @@ namespace CONTROLE_DE_PEDIDOS
             }
             finally
             {
+                _gravando = false;
                 btnGravar.Enabled = true;
                 btnCancelar.Enabled = true;
             }
+        }
+
+        // Durante o UPDATE no Integra o "X"/Alt+F4 ficaria ativo (só os botões são
+        // desabilitados): fechar ali descartava o dialog e o MessageBox(this) do
+        // resultado estourava ObjectDisposedException num async void — e o operador
+        // ficava sem saber se a gravação aconteceu.
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_gravando && e.CloseReason == CloseReason.UserClosing)
+                e.Cancel = true;
+            base.OnFormClosing(e);
         }
     }
 }
