@@ -14,6 +14,7 @@ namespace CONTROLE_DE_PEDIDOS
         private Label lblContagem = null!;
         private Label lblSelecionados = null!;
         private bool _alterou;
+        private bool _excluindo;
 
         public ExclusaoMassaForm()
         {
@@ -386,6 +387,8 @@ namespace CONTROLE_DE_PEDIDOS
                     }
                 }
 
+                if (IsDisposed) return; // janela fechada durante a carga
+
                 dgvPedidos.SuspendLayout();
                 dgvPedidos.SkipAutoAdjust = true;
                 try
@@ -403,6 +406,8 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
+                Logger.Error("Erro ao carregar pedidos (exclusão em massa)", ex);
+                if (IsDisposed) return;
                 MessageBox.Show(this, $"Erro ao carregar pedidos: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -631,6 +636,7 @@ namespace CONTROLE_DE_PEDIDOS
 
             if (confirm != DialogResult.Yes) return;
 
+            _excluindo = true;
             btnExcluir.Enabled = false;
             btnMarcarTodos.Enabled = false;
             btnDesmarcarTodos.Enabled = false;
@@ -710,6 +716,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
             finally
             {
+                _excluindo = false;
                 btnExcluir.Enabled = true;
                 btnMarcarTodos.Enabled = true;
                 btnDesmarcarTodos.Enabled = true;
@@ -720,6 +727,14 @@ namespace CONTROLE_DE_PEDIDOS
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            // Fechar no meio do laço de exclusão: o _alterou ainda era false (Form1 não
+            // recarregava), o laço seguia excluindo em segundo plano e o MessageBox(this)
+            // do resumo estourava ObjectDisposedException em async void.
+            if (_excluindo && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                return;
+            }
             if (_alterou)
                 DialogResult = DialogResult.OK;
             base.OnFormClosing(e);
