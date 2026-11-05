@@ -12,7 +12,17 @@ namespace CONTROLE_DE_PEDIDOS
             Application.ThreadException += (_, e) =>
                 Logger.Error("Exceção não tratada (UI thread)", e.Exception);
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
-                Logger.Error("Exceção não tratada (AppDomain)", e.ExceptionObject as Exception);
+                Logger.Error($"Exceção não tratada (AppDomain, encerrando={e.IsTerminating})"
+                             + (e.ExceptionObject is Exception ? "" : $": {e.ExceptionObject}"),
+                             e.ExceptionObject as Exception);
+            // Fire-and-forget (_ = XxxAsync()) é padrão no app: sem isto, uma falha numa
+            // dessas Tasks sumia sem deixar rastro no log (no .NET Core ela não derruba o
+            // processo, só é descartada quando o GC finaliza a Task).
+            TaskScheduler.UnobservedTaskException += (_, e) =>
+            {
+                Logger.Warn("Exceção em Task não observada", e.Exception);
+                e.SetObserved();
+            };
 
             Logger.Info("=== Aplicação iniciada ===");
 
