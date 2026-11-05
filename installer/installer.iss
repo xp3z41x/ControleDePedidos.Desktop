@@ -1,9 +1,9 @@
-; Inno Setup script para Controle de Pedidos v11.6.1
+; Inno Setup script para Controle de Pedidos v11.7.0
 ; Compilar com: "C:\Program Files (x86)\Inno Setup 6\iscc.exe" installer\installer.iss
 ; Pre-requisito: dotnet publish "CONTROLE DE PEDIDOS.csproj" -c Release
 
 #define MyAppName "Controle de Pedidos"
-#define MyAppVersion "11.6.1"
+#define MyAppVersion "11.7.0"
 #define MyAppPublisher "Bernardo Graunke"
 #define MyAppExeName "CONTROLE DE PEDIDOS.exe"
 #define MyPublishDir "..\bin\Release\net10.0-windows\win-x64\publish"
@@ -29,7 +29,7 @@ UninstallDisplayName={#MyAppName} {#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-VersionInfoVersion=11.6.1.0
+VersionInfoVersion=11.7.0.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoProductName={#MyAppName}
 
