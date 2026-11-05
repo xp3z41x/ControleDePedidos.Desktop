@@ -112,7 +112,11 @@ namespace CONTROLE_DE_PEDIDOS
             };
             try
             {
-                File.WriteAllLines(ConfigPath, lines);
+                // Atômico: o config.ini fica ao lado do EXE e é lido por TODAS as sessões
+                // do RDS. WriteAllLines truncava e reescrevia no lugar — uma instância
+                // abrindo nesse instante recebia IOException (o app nem subia) ou lia
+                // um arquivo incompleto (chaves faltando = padrões, ex.: Filial=1).
+                ArquivoAtomico.GravarTexto(ConfigPath, string.Join(Environment.NewLine, lines) + Environment.NewLine);
             }
             catch (Exception ex)
             {
@@ -131,7 +135,7 @@ namespace CONTROLE_DE_PEDIDOS
                 return config;
             }
 
-            foreach (var line in File.ReadAllLines(ConfigPath))
+            foreach (var line in ArquivoAtomico.LerLinhas(ConfigPath))
             {
                 if (string.IsNullOrWhiteSpace(line) || line.StartsWith("["))
                     continue;
@@ -174,5 +178,65 @@ namespace CONTROLE_DE_PEDIDOS
 
             return config;
         }
+    }
+
+    /// <summary>
+    /// Leitura/gravação de arquivos pequenos compartilhados entre instâncias (RDS).
+    /// A gravação vai para um temporário e substitui o destino de uma vez: quem lê vê o
+    /// arquivo antigo ou o novo, nunca um pela metade. Tentativas curtas absorvem a
+    /// disputa momentânea com outra instância lendo/gravando o mesmo arquivo.
+    /// </summary>
+    internal static class ArquivoAtomico
+    {
+        private const int Tentativas = 6;
+
+        public static void GravarTexto(string caminho, string conteudo)
+        {
+            var temp = $"{caminho}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                File.WriteAllText(temp, conteudo, new System.Text.UTF8Encoding(false));
+                for (int i = 0; ; i++)
+                {
+                    try
+                    {
+                        File.Move(temp, caminho, overwrite: true);
+                        return;
+                    }
+                    catch (Exception ex) when (i < Tentativas - 1
+                                               && ex is IOException or UnauthorizedAccessException)
+                    {
+                        Thread.Sleep(15 + i * 25 + Random.Shared.Next(0, 20));
+                    }
+                }
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { /* sobra .tmp inofensiva */ }
+            }
+        }
+
+        public static string LerTexto(string caminho)
+        {
+            for (int i = 0; ; i++)
+            {
+                try
+                {
+                    using var fs = new FileStream(caminho, FileMode.Open, FileAccess.Read,
+                                                  FileShare.ReadWrite | FileShare.Delete);
+                    using var sr = new StreamReader(fs, detectEncodingFromByteOrderMarks: true);
+                    return sr.ReadToEnd();
+                }
+                catch (Exception ex) when (i < Tentativas - 1
+                                           && ex is IOException or UnauthorizedAccessException
+                                           && ex is not FileNotFoundException and not DirectoryNotFoundException)
+                {
+                    Thread.Sleep(15 + i * 25 + Random.Shared.Next(0, 20));
+                }
+            }
+        }
+
+        public static string[] LerLinhas(string caminho) =>
+            LerTexto(caminho).ReplaceLineEndings("\n").Split('\n');
     }
 }
