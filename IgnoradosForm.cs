@@ -179,6 +179,16 @@ namespace CONTROLE_DE_PEDIDOS
                 }
             );
 
+            // Ignorado que não existe mais no estorc da filial: linha esmaecida e o botão
+            // passa a "Remover da Lista" (não há o que restaurar nos pendentes).
+            dgvIgnorados.CellFormatting += (_, e) =>
+            {
+                if (e.RowIndex < 0 || e.CellStyle is null) return;
+                if (dgvIgnorados.Rows[e.RowIndex].DataBoundItem is OrcamentoIgnorado { ExisteNoIntegra: false })
+                    e.CellStyle.ForeColor = Theme.TextMuted;
+            };
+            dgvIgnorados.SelectionChanged += (_, _) => AtualizarBotao();
+
             panelCard.Controls.Add(dgvIgnorados);
             panelCard.Controls.Add(separadorInferior);
             panelCard.Controls.Add(panelAcoes);
@@ -262,7 +272,22 @@ namespace CONTROLE_DE_PEDIDOS
                 });
                 if (IsDisposed) return;
 
-                _lista = new SortableBindingList<OrcamentoIgnorado>(dados ?? []);
+                // Ignorados sem linha no estorc da filial (orçamento apagado no Integra ou
+                // de outra filial) sumiam da tela e nunca podiam sair da tabela de
+                // ignorados. Entram na lista como "órfãos" para poderem ser removidos.
+                dados ??= [];
+                var encontrados = dados.Select(d => d.Orcamento).ToHashSet();
+                dados.AddRange(ignorados
+                    .Where(o => !encontrados.Contains(o))
+                    .OrderByDescending(o => o)
+                    .Select(o => new OrcamentoIgnorado
+                    {
+                        Orcamento = o,
+                        Nome = "(não existe mais no Integra)",
+                        ExisteNoIntegra = false
+                    }));
+
+                _lista = new SortableBindingList<OrcamentoIgnorado>(dados);
                 dgvIgnorados.SuspendLayout();
                 dgvIgnorados.SkipAutoAdjust = true;
                 try
@@ -288,10 +313,18 @@ namespace CONTROLE_DE_PEDIDOS
             if (_ocupado) return;
             if (dgvIgnorados.CurrentRow?.DataBoundItem is not OrcamentoIgnorado item) return;
 
-            var confirm = MessageBox.Show(this,
-                $"Restaurar o orçamento {item.Orcamento} ({item.Nome})?\n\nEle voltará a aparecer nos pendentes.",
-                "Confirmar",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            var confirm = item.ExisteNoIntegra
+                ? MessageBox.Show(this,
+                    $"Restaurar o orçamento {item.Orcamento} ({item.Nome})?\n\nEle voltará a aparecer nos pendentes.",
+                    "Confirmar",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question)
+                : MessageBox.Show(this,
+                    $"O orçamento {item.Orcamento} não existe mais no Integra (filial {_db.Config.Filial}).\n\n" +
+                    "Ele será apenas removido da lista de ignorados — não há pedido para voltar aos pendentes. " +
+                    "Se o orçamento reaparecer no Integra, ele voltará a ser exibido normalmente.\n\n" +
+                    "Remover da lista de ignorados?",
+                    "Orçamento inexistente no Integra",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
 
             if (confirm != DialogResult.Yes) return;
 
@@ -333,7 +366,17 @@ namespace CONTROLE_DE_PEDIDOS
 
         private void AtualizarContagem()
         {
-            lblContagem.Text = $"{_lista.Count} ignorado{(_lista.Count != 1 ? "s" : "")}";
+            int orfaos = _lista.Count(i => !i.ExisteNoIntegra);
+            lblContagem.Text = $"{_lista.Count} ignorado{(_lista.Count != 1 ? "s" : "")}" +
+                (orfaos > 0 ? $" ({orfaos} inexistente{(orfaos != 1 ? "s" : "")} no Integra)" : "");
+            AtualizarBotao();
+        }
+
+        private void AtualizarBotao()
+        {
+            btnRemover.Text = dgvIgnorados.CurrentRow?.DataBoundItem is OrcamentoIgnorado { ExisteNoIntegra: false }
+                ? "Remover da Lista"
+                : "Restaurar Selecionado";
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -355,5 +398,7 @@ namespace CONTROLE_DE_PEDIDOS
         public string Nome { get; set; } = "";
         public string Cidade { get; set; } = "";
         public string Estado { get; set; } = "";
+        /// <summary>False quando o orçamento ignorado não tem mais linha no estorc da filial.</summary>
+        public bool ExisteNoIntegra { get; set; } = true;
     }
 }
