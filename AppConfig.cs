@@ -151,7 +151,9 @@ namespace CONTROLE_DE_PEDIDOS
                     case "IP": config.ServidorIP = value; break;
                     case "Porta": config.Porta = value; break;
                     case "Usuario": config.Usuario = value; break;
-                    case "Senha": config.Senha = value; break;
+                    // Sem Trim: espaços nas pontas fazem parte da senha (antes eram cortados
+                    // e a senha ficava impossível de usar). O Salvar grava "Senha=<valor>".
+                    case "Senha": config.Senha = parts[1]; break;
                     case "BancoIntegra": config.BancoIntegra = value; break;
                     case "BancoControle": config.BancoControle = value; break;
                     case "Filial": if (int.TryParse(value, out var filial)) config.Filial = filial; break;

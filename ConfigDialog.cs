@@ -363,7 +363,7 @@ namespace CONTROLE_DE_PEDIDOS
             Config.ServidorIP = txtIP.Text.Trim();
             Config.Porta = txtPorta.Text.Trim();
             Config.Usuario = txtUsuario.Text.Trim();
-            Config.Senha = txtSenha.Text.Trim();
+            Config.Senha = txtSenha.Text;   // sem Trim: espaços nas pontas fazem parte da senha
             Config.BancoIntegra = txtBancoIntegra.Text.Trim();
             Config.BancoControle = txtBancoControle.Text.Trim();
             Config.Filial = int.TryParse(txtFilial.Text.Trim(), out var f) ? f : Config.Filial;

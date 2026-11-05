@@ -88,7 +88,7 @@ Mini-janela para imprimir **qualquer orçamento da filial** — inclusive antigo
 | CÓPIA DE PEDIDO | paisagem, ordenar alfabeticamente |
 | DADOS DA EMPRESA (CÓPIA DE PEDIDO) | Razão Social, CNPJ, IE, Endereço, Cidade/UF/CEP, Telefone, E-mail, WhatsApp — impressos no cabeçalho da Cópia; vazios são omitidos |
 
-Botão **Testar** valida a conexão com os **dois** bancos antes de salvar e reporta cada um (Integra / controle; banco de controle inexistente com o servidor acessível aparece como "será criado"). O `config.ini` é por máquina: no servidor RDS, preencher uma vez vale para todos os operadores.
+Botão **Testar** valida a conexão com os **dois** bancos antes de salvar e reporta cada um (Integra / controle; banco de controle inexistente com o servidor acessível aparece como "será criado"). A senha é gravada e lida sem `Trim` (espaços nas pontas são preservados); os demais campos são aparados. O `config.ini` é por máquina: no servidor RDS, preencher uma vez vale para todos os operadores.
 
 ## Comportamentos transversais
 
