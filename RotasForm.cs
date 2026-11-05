@@ -2,7 +2,7 @@ using System.ComponentModel;
 
 namespace CONTROLE_DE_PEDIDOS
 {
-    public class RotasForm : Form
+    public class RotasForm : FormEscalavel
     {
         private readonly DatabaseService _db = DatabaseService.Instancia;
         private DataGridView dgvRotas = null!;
@@ -25,8 +25,8 @@ namespace CONTROLE_DE_PEDIDOS
             SuspendLayout();
 
             Text = "Cadastro de Rotas";
-            ClientSize = new Size(700, 550);
-            MinimumSize = new Size(500, 400);
+            ClientSize = Dpi(700, 550);
+            MinimumSize = Dpi(500, 400);
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             MinimizeBox = false;
@@ -39,8 +39,8 @@ namespace CONTROLE_DE_PEDIDOS
             // ---- Card principal ----
             var panelCard = new Panel
             {
-                Location = new Point(16, 16),
-                Size = new Size(ClientSize.Width - 32, ClientSize.Height - 32),
+                Location = DpiPt(16, 16),
+                Size = new Size(ClientSize.Width - Dpi(32), ClientSize.Height - Dpi(32)),
                 BackColor = Theme.BgPanel,
                 Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right
             };
@@ -54,7 +54,7 @@ namespace CONTROLE_DE_PEDIDOS
             var panelHeader = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 48,
+                Height = Dpi(48),
                 BackColor = Theme.BgCard
             };
 
@@ -64,7 +64,7 @@ namespace CONTROLE_DE_PEDIDOS
                 Font = Theme.FontTitle,
                 ForeColor = Theme.TextPrimary,
                 AutoSize = true,
-                Location = new Point(16, 14)
+                Location = DpiPt(16, 14)
             };
 
             lblContagem = new Label
@@ -79,9 +79,9 @@ namespace CONTROLE_DE_PEDIDOS
             panelHeader.Controls.Add(lblContagem);
             panelHeader.Resize += (_, _) =>
             {
-                lblTitulo.Location = new Point(16, (panelHeader.Height - lblTitulo.Height) / 2);
+                lblTitulo.Location = new Point(Dpi(16), (panelHeader.Height - lblTitulo.Height) / 2);
                 lblContagem.Location = new Point(
-                    panelHeader.Width - lblContagem.Width - 16,
+                    panelHeader.Width - lblContagem.Width - Dpi(16),
                     (panelHeader.Height - lblContagem.Height) / 2);
             };
             lblContagem.TextChanged += (_, _) =>
@@ -89,7 +89,7 @@ namespace CONTROLE_DE_PEDIDOS
                 BeginInvoke(() =>
                 {
                     lblContagem.Location = new Point(
-                        panelHeader.Width - lblContagem.Width - 16,
+                        panelHeader.Width - lblContagem.Width - Dpi(16),
                         (panelHeader.Height - lblContagem.Height) / 2);
                 });
             };
@@ -106,9 +106,9 @@ namespace CONTROLE_DE_PEDIDOS
             var panelAdd = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 52,
+                Height = Dpi(52),
                 BackColor = Theme.BgCard,
-                Padding = new Padding(12, 10, 12, 10)
+                Padding = Dpi(12, 10, 12, 10)
             };
             panelAdd.Paint += (_, e) =>
             {
@@ -118,8 +118,8 @@ namespace CONTROLE_DE_PEDIDOS
 
             txtNovaRota = new TextBox
             {
-                Location = new Point(16, 12),
-                Size = new Size(260, 28),
+                Location = DpiPt(16, 12),
+                Size = Dpi(260, 28),
                 PlaceholderText = "Nome da nova rota..."
             };
             Theme.EstilizarTextBox(txtNovaRota);
@@ -135,7 +135,7 @@ namespace CONTROLE_DE_PEDIDOS
             btnAdicionar = new Button
             {
                 Text = "Adicionar",
-                Size = new Size(90, 28)
+                Size = Dpi(90, 28)
             };
             Theme.EstilizarBotao(btnAdicionar, primario: true);
             btnAdicionar.Click += (_, _) => AdicionarRota();
@@ -143,7 +143,7 @@ namespace CONTROLE_DE_PEDIDOS
             btnExcluir = new Button
             {
                 Text = "Excluir",
-                Size = new Size(70, 28)
+                Size = Dpi(70, 28)
             };
             Theme.EstilizarBotao(btnExcluir);
             btnExcluir.ForeColor = Theme.Error;
@@ -155,10 +155,10 @@ namespace CONTROLE_DE_PEDIDOS
 
             panelAdd.Resize += (_, _) =>
             {
-                btnExcluir.Location = new Point(panelAdd.Width - btnExcluir.Width - 16, (panelAdd.Height - btnExcluir.Height) / 2);
-                btnAdicionar.Location = new Point(btnExcluir.Left - btnAdicionar.Width - 8, (panelAdd.Height - btnAdicionar.Height) / 2);
-                txtNovaRota.Location = new Point(16, (panelAdd.Height - txtNovaRota.Height) / 2);
-                txtNovaRota.Width = btnAdicionar.Left - 8 - 16;
+                btnExcluir.Location = new Point(panelAdd.Width - btnExcluir.Width - Dpi(16), (panelAdd.Height - btnExcluir.Height) / 2);
+                btnAdicionar.Location = new Point(btnExcluir.Left - btnAdicionar.Width - Dpi(8), (panelAdd.Height - btnAdicionar.Height) / 2);
+                txtNovaRota.Location = new Point(Dpi(16), (panelAdd.Height - txtNovaRota.Height) / 2);
+                txtNovaRota.Width = btnAdicionar.Left - Dpi(8) - Dpi(16);
             };
 
             // ---- Grid ----

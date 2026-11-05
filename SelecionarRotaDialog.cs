@@ -1,6 +1,6 @@
 namespace CONTROLE_DE_PEDIDOS
 {
-    public class SelecionarRotaDialog : Form
+    public class SelecionarRotaDialog : FormEscalavel
     {
         private ComboBox cmbRota = null!;
         private Label lblDica = null!;
@@ -27,12 +27,12 @@ namespace CONTROLE_DE_PEDIDOS
             BackColor = Theme.BgDark;
             ForeColor = Theme.TextPrimary;
             Font = Theme.FontRegular;
-            ClientSize = new Size(350, 160);
+            ClientSize = Dpi(350, 160);
 
             var lblRota = new Label
             {
                 Text = "Qual a rota deste pedido?",
-                Location = new Point(16, 16),
+                Location = DpiPt(16, 16),
                 AutoSize = true,
                 ForeColor = Theme.TextPrimary,
                 Font = Theme.FontRegular
@@ -40,8 +40,8 @@ namespace CONTROLE_DE_PEDIDOS
 
             cmbRota = new ComboBox
             {
-                Location = new Point(16, 42),
-                Size = new Size(318, 28),
+                Location = DpiPt(16, 42),
+                Size = Dpi(318, 28),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = Theme.BgInput,
                 ForeColor = Theme.TextPrimary,
@@ -54,8 +54,8 @@ namespace CONTROLE_DE_PEDIDOS
             lblDica = new Label
             {
                 Text = "Carregando rotas…",
-                Location = new Point(16, 78),
-                Size = new Size(318, 28), // cabe 2 linhas (o texto quebra sozinho)
+                Location = DpiPt(16, 78),
+                Size = Dpi(318, 28), // cabe 2 linhas (o texto quebra sozinho)
                 ForeColor = Theme.TextMuted,
                 Font = Theme.FontSmall
             };
@@ -63,8 +63,8 @@ namespace CONTROLE_DE_PEDIDOS
             btnCancelar = new Button
             {
                 Text = "Cancelar",
-                Size = new Size(90, 32),
-                Location = new Point(244, 108),
+                Size = Dpi(90, 32),
+                Location = DpiPt(244, 108),
                 DialogResult = DialogResult.Cancel
             };
             Theme.EstilizarBotao(btnCancelar);
@@ -72,8 +72,8 @@ namespace CONTROLE_DE_PEDIDOS
             btnOk = new Button
             {
                 Text = "Confirmar",
-                Size = new Size(90, 32),
-                Location = new Point(146, 108),
+                Size = Dpi(90, 32),
+                Location = DpiPt(146, 108),
                 DialogResult = DialogResult.OK,
                 Enabled = false // habilitado só depois que houver rota para escolher
             };

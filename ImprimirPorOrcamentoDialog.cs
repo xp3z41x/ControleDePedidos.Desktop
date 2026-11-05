@@ -7,7 +7,7 @@ namespace CONTROLE_DE_PEDIDOS
     /// status (decisão de projeto: é ferramenta de reimpressão/consulta).
     /// Fluxo: digitar → Buscar (Enter) → conferir cliente/data → imprimir.
     /// </summary>
-    public class ImprimirPorOrcamentoDialog : Form
+    public class ImprimirPorOrcamentoDialog : FormEscalavel
     {
         private readonly DatabaseService _db = DatabaseService.Instancia;
         private readonly Func<int, PedidoControlado?> _localizarControlado;
@@ -53,20 +53,20 @@ namespace CONTROLE_DE_PEDIDOS
             BackColor = Theme.BgDark;
             ForeColor = Theme.TextPrimary;
             Font = Theme.FontRegular;
-            ClientSize = new Size(400, 252);
+            ClientSize = Dpi(400, 252);
 
             var lblOrcamento = new Label
             {
                 Text = "Orçamento:",
-                Location = new Point(16, 16),
+                Location = DpiPt(16, 16),
                 AutoSize = true,
                 ForeColor = Theme.TextPrimary
             };
 
             txtOrcamento = new TextBox
             {
-                Location = new Point(16, 40),
-                Size = new Size(252, 26),
+                Location = DpiPt(16, 40),
+                Size = Dpi(252, 26),
                 Font = Theme.FontRegular,
                 MaxLength = 9
             };
@@ -78,16 +78,16 @@ namespace CONTROLE_DE_PEDIDOS
             btnBuscar = new Button
             {
                 Text = "Buscar",
-                Size = new Size(104, 30),
-                Location = new Point(280, 38)
+                Size = Dpi(104, 30),
+                Location = DpiPt(280, 38)
             };
             Theme.EstilizarBotao(btnBuscar, primario: true);
             btnBuscar.Click += BtnBuscar_Click;
 
             lblCliente = new Label
             {
-                Location = new Point(16, 80),
-                Size = new Size(368, 20),
+                Location = DpiPt(16, 80),
+                Size = Dpi(368, 20),
                 AutoSize = false,
                 AutoEllipsis = true,   // nome de cliente longo trunca com "…"
                 Font = Theme.FontRegularBold,
@@ -96,7 +96,7 @@ namespace CONTROLE_DE_PEDIDOS
 
             lblDataHora = new Label
             {
-                Location = new Point(16, 102),
+                Location = DpiPt(16, 102),
                 AutoSize = true,
                 Font = Theme.FontSmall,
                 ForeColor = Theme.TextSecondary
@@ -104,17 +104,17 @@ namespace CONTROLE_DE_PEDIDOS
 
             lblChip = new Label
             {
-                Location = new Point(16, 124),
+                Location = DpiPt(16, 124),
                 AutoSize = true,
                 Font = Theme.FontStatus,
-                Padding = new Padding(6, 2, 6, 2)
+                Padding = Dpi(6, 2, 6, 2)
             };
 
             btnSeparacao = new Button
             {
                 Text = "Relatório de Separação",
-                Size = new Size(184, 36),
-                Location = new Point(16, 156)
+                Size = Dpi(184, 36),
+                Location = DpiPt(16, 156)
             };
             Theme.EstilizarBotao(btnSeparacao, primario: true);
             btnSeparacao.Click += async (_, _) => await ExecutarImpressaoAsync(_imprimirSeparacao);
@@ -122,8 +122,8 @@ namespace CONTROLE_DE_PEDIDOS
             btnCopia = new Button
             {
                 Text = "Cópia de Pedido",
-                Size = new Size(176, 36),
-                Location = new Point(208, 156)
+                Size = Dpi(176, 36),
+                Location = DpiPt(208, 156)
             };
             Theme.EstilizarBotao(btnCopia);
             btnCopia.Click += async (_, _) => await ExecutarImpressaoAsync(_imprimirCopia);
@@ -131,8 +131,8 @@ namespace CONTROLE_DE_PEDIDOS
             btnFechar = new Button
             {
                 Text = "Fechar",
-                Size = new Size(90, 32),
-                Location = new Point(294, 204),
+                Size = Dpi(90, 32),
+                Location = DpiPt(294, 204),
                 DialogResult = DialogResult.Cancel
             };
             Theme.EstilizarBotao(btnFechar);

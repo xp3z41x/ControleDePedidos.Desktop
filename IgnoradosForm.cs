@@ -2,7 +2,7 @@ using System.ComponentModel;
 
 namespace CONTROLE_DE_PEDIDOS
 {
-    public class IgnoradosForm : Form
+    public class IgnoradosForm : FormEscalavel
     {
         private readonly DatabaseService _db = DatabaseService.Instancia;
         private OptimizedDataGridView dgvIgnorados = null!;
@@ -24,8 +24,8 @@ namespace CONTROLE_DE_PEDIDOS
             SuspendLayout();
 
             Text = "Orçamentos Ignorados";
-            ClientSize = new Size(750, 550);
-            MinimumSize = new Size(550, 400);
+            ClientSize = Dpi(750, 550);
+            MinimumSize = Dpi(550, 400);
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             MinimizeBox = false;
@@ -37,8 +37,8 @@ namespace CONTROLE_DE_PEDIDOS
 
             var panelCard = new Panel
             {
-                Location = new Point(16, 16),
-                Size = new Size(ClientSize.Width - 32, ClientSize.Height - 32),
+                Location = DpiPt(16, 16),
+                Size = new Size(ClientSize.Width - Dpi(32), ClientSize.Height - Dpi(32)),
                 BackColor = Theme.BgPanel,
                 Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right
             };
@@ -52,7 +52,7 @@ namespace CONTROLE_DE_PEDIDOS
             var panelHeader = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 48,
+                Height = Dpi(48),
                 BackColor = Theme.BgCard
             };
 
@@ -62,7 +62,7 @@ namespace CONTROLE_DE_PEDIDOS
                 Font = Theme.FontTitle,
                 ForeColor = Theme.TextPrimary,
                 AutoSize = true,
-                Location = new Point(16, 14)
+                Location = DpiPt(16, 14)
             };
 
             lblContagem = new Label
@@ -77,9 +77,9 @@ namespace CONTROLE_DE_PEDIDOS
             panelHeader.Controls.Add(lblContagem);
             panelHeader.Resize += (_, _) =>
             {
-                lblTitulo.Location = new Point(16, (panelHeader.Height - lblTitulo.Height) / 2);
+                lblTitulo.Location = new Point(Dpi(16), (panelHeader.Height - lblTitulo.Height) / 2);
                 lblContagem.Location = new Point(
-                    panelHeader.Width - lblContagem.Width - 16,
+                    panelHeader.Width - lblContagem.Width - Dpi(16),
                     (panelHeader.Height - lblContagem.Height) / 2);
             };
             lblContagem.TextChanged += (_, _) =>
@@ -87,7 +87,7 @@ namespace CONTROLE_DE_PEDIDOS
                 BeginInvoke(() =>
                 {
                     lblContagem.Location = new Point(
-                        panelHeader.Width - lblContagem.Width - 16,
+                        panelHeader.Width - lblContagem.Width - Dpi(16),
                         (panelHeader.Height - lblContagem.Height) / 2);
                 });
             };
@@ -103,7 +103,7 @@ namespace CONTROLE_DE_PEDIDOS
             var panelAcoes = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 46,
+                Height = Dpi(46),
                 BackColor = Theme.BgCard
             };
             panelAcoes.Paint += (_, e) =>
@@ -115,7 +115,7 @@ namespace CONTROLE_DE_PEDIDOS
             btnRemover = new Button
             {
                 Text = "Restaurar Selecionado",
-                Size = new Size(160, 30)
+                Size = Dpi(160, 30)
             };
             Theme.EstilizarBotao(btnRemover, primario: true);
             btnRemover.Click += BtnRemover_Click;
@@ -123,7 +123,7 @@ namespace CONTROLE_DE_PEDIDOS
             panelAcoes.Controls.Add(btnRemover);
             panelAcoes.Resize += (_, _) =>
             {
-                btnRemover.Location = new Point(panelAcoes.Width - btnRemover.Width - 16, (panelAcoes.Height - btnRemover.Height) / 2);
+                btnRemover.Location = new Point(panelAcoes.Width - btnRemover.Width - Dpi(16), (panelAcoes.Height - btnRemover.Height) / 2);
             };
 
             var separadorInferior = new Panel
@@ -154,7 +154,7 @@ namespace CONTROLE_DE_PEDIDOS
                     Name = "colOrcamento",
                     HeaderText = "ORÇAMENTO",
                     DataPropertyName = "Orcamento",
-                    Width = 110
+                    Width = Dpi(110)
                 },
                 new DataGridViewTextBoxColumn
                 {
@@ -168,14 +168,14 @@ namespace CONTROLE_DE_PEDIDOS
                     Name = "colCidade",
                     HeaderText = "CIDADE",
                     DataPropertyName = "Cidade",
-                    Width = 130
+                    Width = Dpi(130)
                 },
                 new DataGridViewTextBoxColumn
                 {
                     Name = "colEstado",
                     HeaderText = "UF",
                     DataPropertyName = "Estado",
-                    Width = 55
+                    Width = Dpi(55)
                 }
             );
 

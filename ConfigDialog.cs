@@ -1,6 +1,6 @@
 namespace CONTROLE_DE_PEDIDOS
 {
-    public class ConfigDialog : Form
+    public class ConfigDialog : FormEscalavel
     {
         private TextBox txtIP = null!;
         private TextBox txtPorta = null!;
@@ -30,8 +30,9 @@ namespace CONTROLE_DE_PEDIDOS
         private Button btnTestar = null!;
         private Label lblStatus = null!;
 
-        private const int MargemX = 24;
-        private const int MargemTop = 20;
+        // Margens em pixels lógicos (96 DPI), convertidas para o DPI corrente
+        private int MargemX => Dpi(24);
+        private int MargemTop => Dpi(20);
 
         /// <summary>
         /// CÓPIA de trabalho da configuração. O dialog nunca altera a instância viva
@@ -78,7 +79,7 @@ namespace CONTROLE_DE_PEDIDOS
             var panelBotoes = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 58,
+                Height = Dpi(58),
                 BackColor = Theme.BgPanel
             };
             panelBotoes.Paint += (_, e) =>
@@ -87,19 +88,19 @@ namespace CONTROLE_DE_PEDIDOS
                 e.Graphics.DrawLine(pen, 0, 0, panelBotoes.Width, 0);
             };
 
-            btnCancelar = new Button { Text = "Cancelar", Size = new Size(100, 32) };
+            btnCancelar = new Button { Text = "Cancelar", Size = Dpi(100, 32) };
             Theme.EstilizarBotao(btnCancelar);
             btnCancelar.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
 
-            btnSalvar = new Button { Text = "Salvar", Size = new Size(100, 32) };
+            btnSalvar = new Button { Text = "Salvar", Size = Dpi(100, 32) };
             Theme.EstilizarBotao(btnSalvar, primario: true);
             btnSalvar.Click += BtnSalvar_Click;
 
-            btnTestar = new Button { Text = "Testar", Size = new Size(100, 32) };
+            btnTestar = new Button { Text = "Testar", Size = Dpi(100, 32) };
             Theme.EstilizarBotao(btnTestar);
             btnTestar.Click += BtnTestar_Click;
 
-            int by = (panelBotoes.Height - 32) / 2;
+            int by = (panelBotoes.Height - btnCancelar.Height) / 2;
             btnCancelar.Location = new Point(0, by);
             btnSalvar.Location = new Point(0, by);
             btnTestar.Location = new Point(0, by);
@@ -112,8 +113,8 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 int rx = panelBotoes.Width - MargemX;
                 btnCancelar.Location = new Point(rx - btnCancelar.Width, btnCancelar.Top);
-                btnSalvar.Location = new Point(btnCancelar.Left - btnSalvar.Width - 8, btnCancelar.Top);
-                btnTestar.Location = new Point(btnSalvar.Left - btnTestar.Width - 8, btnCancelar.Top);
+                btnSalvar.Location = new Point(btnCancelar.Left - btnSalvar.Width - Dpi(8), btnCancelar.Top);
+                btnTestar.Location = new Point(btnSalvar.Left - btnTestar.Width - Dpi(8), btnCancelar.Top);
             };
 
             // ---- Container de campos (dock fill) ----
@@ -124,7 +125,7 @@ namespace CONTROLE_DE_PEDIDOS
                 BackColor = Theme.BgDark
             };
 
-            int larguraJanela = LogicalToDeviceUnits(440);
+            int larguraJanela = Dpi(440);
             int contentWidth = larguraJanela - (MargemX * 2);
             int y = MargemTop;
 
@@ -135,27 +136,27 @@ namespace CONTROLE_DE_PEDIDOS
             y = AdicionarCampo(container, "Usuário", out txtUsuario, Config.Usuario, y, contentWidth);
             y = AdicionarCampo(container, "Senha", out txtSenha, Config.Senha, y, contentWidth, true);
 
-            y += 10;
+            y += Dpi(10);
 
             // Secao: Bancos
             y = AdicionarSecao(container, "BANCOS DE DADOS", y, contentWidth);
             y = AdicionarCampo(container, "Banco Integra", out txtBancoIntegra, Config.BancoIntegra, y, contentWidth);
             y = AdicionarCampo(container, "Banco Controle", out txtBancoControle, Config.BancoControle, y, contentWidth);
 
-            y += 10;
+            y += Dpi(10);
 
             // Secao: Filtros
             y = AdicionarSecao(container, "FILTROS DE BUSCA", y, contentWidth);
             y = AdicionarCampo(container, "Filial", out txtFilial, Config.Filial.ToString(), y, contentWidth);
             y = AdicionarCampo(container, "Orçamento Mínimo", out txtOrcamentoMinimo, Config.OrcamentoMinimo.ToString(), y, contentWidth);
 
-            y += 10;
+            y += Dpi(10);
 
             // Secao: Fiscal
             y = AdicionarSecao(container, "FISCAL", y, contentWidth);
             y = AdicionarCampo(container, "Filial Fiscal", out txtFilialFiscal, Config.FilialFiscal.ToString(), y, contentWidth);
 
-            y += 10;
+            y += Dpi(10);
 
             // Secao: Relatorio de Separacao
             y = AdicionarSecao(container, "RELATÓRIO DE SEPARAÇÃO", y, contentWidth);
@@ -164,14 +165,14 @@ namespace CONTROLE_DE_PEDIDOS
             y = AdicionarCheckBox(container, "Ordenar itens por LOCAL (sub-ordem descrição)", out chkSeparacaoOrdenarPorLocal, Config.SeparacaoOrdenarPorLocal, y);
             y = AdicionarCheckBox(container, "Exibir quantidades/estoques com 2 casas decimais", out chkSeparacaoCasasDecimais, Config.SeparacaoCasasDecimais, y);
 
-            y += 10;
+            y += Dpi(10);
 
             // Secao: Copia de Pedido
             y = AdicionarSecao(container, "CÓPIA DE PEDIDO", y, contentWidth);
             y = AdicionarCheckBox(container, "Imprimir em paisagem (padrão: retrato)", out chkCopiaPaisagem, Config.CopiaPaisagem, y);
             y = AdicionarCheckBox(container, "Ordenar itens alfabeticamente (padrão: ordem do pedido)", out chkCopiaOrdenarAlfabetica, Config.CopiaOrdenarAlfabetica, y);
 
-            y += 10;
+            y += Dpi(10);
 
             // Secao: Dados da empresa (cabecalho da Copia de Pedido)
             y = AdicionarSecao(container, "DADOS DA EMPRESA (CÓPIA DE PEDIDO)", y, contentWidth);
@@ -189,13 +190,13 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 Text = "",
                 AutoSize = false,
-                Size = new Size(contentWidth, 24),
-                Location = new Point(MargemX, y + 8),
+                Size = new Size(contentWidth, Dpi(24)),
+                Location = new Point(MargemX, y + Dpi(8)),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = Theme.FontSmall
             };
             container.Controls.Add(lblStatus);
-            y += 40;
+            y += Dpi(40);
 
             // ---- Montar form ----
             Controls.Add(container);
@@ -229,12 +230,12 @@ namespace CONTROLE_DE_PEDIDOS
             var linha = new Panel
             {
                 Size = new Size(width, 1),
-                Location = new Point(MargemX, y + 18),
+                Location = new Point(MargemX, y + Dpi(18)),
                 BackColor = Theme.Border
             };
             container.Controls.Add(linha);
 
-            return y + 28;
+            return y + Dpi(28);
         }
 
         private int AdicionarCampo(Panel container, string label, out TextBox textBox, string value, int y, int width, bool isPassword = false)
@@ -252,14 +253,14 @@ namespace CONTROLE_DE_PEDIDOS
             textBox = new TextBox
             {
                 Text = value,
-                Size = new Size(width, 26),
-                Location = new Point(MargemX, y + 18)
+                Size = new Size(width, Dpi(26)),
+                Location = new Point(MargemX, y + Dpi(18))
             };
             Theme.EstilizarTextBox(textBox);
             if (isPassword) textBox.UseSystemPasswordChar = true;
             container.Controls.Add(textBox);
 
-            return y + 48;
+            return y + Dpi(48);
         }
 
         private int AdicionarCheckBox(Panel container, string label, out CheckBox checkBox, bool value, int y)
@@ -277,7 +278,7 @@ namespace CONTROLE_DE_PEDIDOS
             };
             container.Controls.Add(checkBox);
 
-            return y + 30;
+            return y + Dpi(30);
         }
 
         private async void BtnTestar_Click(object? sender, EventArgs e)

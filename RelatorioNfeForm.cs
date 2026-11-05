@@ -3,7 +3,7 @@ using System.Drawing.Printing;
 
 namespace CONTROLE_DE_PEDIDOS
 {
-    public class RelatorioNfeForm : Form
+    public class RelatorioNfeForm : FormEscalavel
     {
         private readonly DatabaseService _db = DatabaseService.Instancia;
         private DataGridView dgvPedidos = null!;
@@ -28,8 +28,8 @@ namespace CONTROLE_DE_PEDIDOS
             SuspendLayout();
 
             Text = "Relatório de NF-e";
-            ClientSize = new Size(950, 620);
-            MinimumSize = new Size(750, 500);
+            ClientSize = Dpi(950, 620);
+            MinimumSize = Dpi(750, 500);
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             MinimizeBox = false;
@@ -41,8 +41,8 @@ namespace CONTROLE_DE_PEDIDOS
 
             var panelCard = new Panel
             {
-                Location = new Point(16, 16),
-                Size = new Size(ClientSize.Width - 32, ClientSize.Height - 32),
+                Location = DpiPt(16, 16),
+                Size = new Size(ClientSize.Width - Dpi(32), ClientSize.Height - Dpi(32)),
                 BackColor = Theme.BgPanel,
                 Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right
             };
@@ -56,7 +56,7 @@ namespace CONTROLE_DE_PEDIDOS
             var panelHeader = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 48,
+                Height = Dpi(48),
                 BackColor = Theme.BgCard
             };
 
@@ -66,7 +66,7 @@ namespace CONTROLE_DE_PEDIDOS
                 Font = Theme.FontTitle,
                 ForeColor = Theme.TextPrimary,
                 AutoSize = true,
-                Location = new Point(16, 14)
+                Location = DpiPt(16, 14)
             };
 
             lblContagem = new Label
@@ -81,9 +81,9 @@ namespace CONTROLE_DE_PEDIDOS
             panelHeader.Controls.Add(lblContagem);
             panelHeader.Resize += (_, _) =>
             {
-                lblTitulo.Location = new Point(16, (panelHeader.Height - lblTitulo.Height) / 2);
+                lblTitulo.Location = new Point(Dpi(16), (panelHeader.Height - lblTitulo.Height) / 2);
                 lblContagem.Location = new Point(
-                    panelHeader.Width - lblContagem.Width - 16,
+                    panelHeader.Width - lblContagem.Width - Dpi(16),
                     (panelHeader.Height - lblContagem.Height) / 2);
             };
             lblContagem.TextChanged += (_, _) =>
@@ -91,7 +91,7 @@ namespace CONTROLE_DE_PEDIDOS
                 BeginInvoke(() =>
                 {
                     lblContagem.Location = new Point(
-                        panelHeader.Width - lblContagem.Width - 16,
+                        panelHeader.Width - lblContagem.Width - Dpi(16),
                         (panelHeader.Height - lblContagem.Height) / 2);
                 });
             };
@@ -107,7 +107,7 @@ namespace CONTROLE_DE_PEDIDOS
             var panelAcoes = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 52,
+                Height = Dpi(52),
                 BackColor = Theme.BgCard
             };
             panelAcoes.Paint += (_, e) =>
@@ -119,7 +119,7 @@ namespace CONTROLE_DE_PEDIDOS
             btnMarcarTodos = new Button
             {
                 Text = "Marcar Todos",
-                Size = new Size(120, 32)
+                Size = Dpi(120, 32)
             };
             Theme.EstilizarBotao(btnMarcarTodos);
             btnMarcarTodos.Click += (_, _) => AlterarSelecaoTodos(true);
@@ -127,7 +127,7 @@ namespace CONTROLE_DE_PEDIDOS
             btnDesmarcarTodos = new Button
             {
                 Text = "Desmarcar Todos",
-                Size = new Size(130, 32)
+                Size = Dpi(130, 32)
             };
             Theme.EstilizarBotao(btnDesmarcarTodos);
             btnDesmarcarTodos.Click += (_, _) => AlterarSelecaoTodos(false);
@@ -135,7 +135,7 @@ namespace CONTROLE_DE_PEDIDOS
             btnMarcarRota = new Button
             {
                 Text = "Marcar Rota",
-                Size = new Size(110, 32)
+                Size = Dpi(110, 32)
             };
             Theme.EstilizarBotao(btnMarcarRota);
             btnMarcarRota.ForeColor = Theme.Accent;
@@ -152,7 +152,7 @@ namespace CONTROLE_DE_PEDIDOS
             btnVisualizar = new Button
             {
                 Text = "Visualizar",
-                Size = new Size(110, 32)
+                Size = Dpi(110, 32)
             };
             Theme.EstilizarBotao(btnVisualizar);
             btnVisualizar.Click += BtnVisualizar_Click;
@@ -160,7 +160,7 @@ namespace CONTROLE_DE_PEDIDOS
             btnGerar = new Button
             {
                 Text = "Imprimir",
-                Size = new Size(110, 32)
+                Size = Dpi(110, 32)
             };
             Theme.EstilizarBotao(btnGerar, primario: true);
             btnGerar.Click += BtnGerar_Click;
@@ -174,17 +174,17 @@ namespace CONTROLE_DE_PEDIDOS
 
             panelAcoes.Resize += (_, _) =>
             {
-                int cy = (panelAcoes.Height - 32) / 2;
-                btnMarcarTodos.Location = new Point(16, cy);
-                btnDesmarcarTodos.Location = new Point(btnMarcarTodos.Right + 8, cy);
-                btnMarcarRota.Location = new Point(btnDesmarcarTodos.Right + 8, cy);
+                int cy = (panelAcoes.Height - Dpi(32)) / 2;
+                btnMarcarTodos.Location = new Point(Dpi(16), cy);
+                btnDesmarcarTodos.Location = new Point(btnMarcarTodos.Right + Dpi(8), cy);
+                btnMarcarRota.Location = new Point(btnDesmarcarTodos.Right + Dpi(8), cy);
 
                 lblSelecionados.Location = new Point(
-                    btnMarcarRota.Right + 16,
+                    btnMarcarRota.Right + Dpi(16),
                     (panelAcoes.Height - lblSelecionados.Height) / 2);
 
-                btnGerar.Location = new Point(panelAcoes.Width - btnGerar.Width - 16, cy);
-                btnVisualizar.Location = new Point(btnGerar.Left - btnVisualizar.Width - 8, cy);
+                btnGerar.Location = new Point(panelAcoes.Width - btnGerar.Width - Dpi(16), cy);
+                btnVisualizar.Location = new Point(btnGerar.Left - btnVisualizar.Width - Dpi(8), cy);
             };
 
             var separadorInferior = new Panel
@@ -216,8 +216,8 @@ namespace CONTROLE_DE_PEDIDOS
                 // Bindada ao item: coluna não-bindada perde as marcações quando o grid é
                 // reordenado (clique no cabeçalho -> ResetBindings recria as linhas).
                 DataPropertyName = nameof(PedidoNfe.Selecionado),
-                Width = 40,
-                MinimumWidth = 40,
+                Width = Dpi(40),
+                MinimumWidth = Dpi(40),
                 ReadOnly = false,
                 FalseValue = false,
                 TrueValue = true,
@@ -228,11 +228,11 @@ namespace CONTROLE_DE_PEDIDOS
 
             dgvPedidos.Columns.AddRange(
                 colCheck,
-                new DataGridViewTextBoxColumn { Name = "colOrcamento", HeaderText = "ORÇAMENTO", DataPropertyName = "Orcamento", Width = 100, MinimumWidth = 80, ReadOnly = true },
-                new DataGridViewTextBoxColumn { Name = "colCliente", HeaderText = "CLIENTE", DataPropertyName = "Cliente", Width = 220, MinimumWidth = 120, ReadOnly = true },
-                new DataGridViewTextBoxColumn { Name = "colFantasia", HeaderText = "NOME FANTASIA", DataPropertyName = "NomeFantasia", Width = 200, MinimumWidth = 100, ReadOnly = true },
-                new DataGridViewTextBoxColumn { Name = "colRota", HeaderText = "ROTA", DataPropertyName = "Rota", Width = 120, MinimumWidth = 80, ReadOnly = true },
-                new DataGridViewTextBoxColumn { Name = "colNfe", HeaderText = "Nº NF-e", DataPropertyName = "NumeroNfe", Width = 110, MinimumWidth = 70, ReadOnly = true }
+                new DataGridViewTextBoxColumn { Name = "colOrcamento", HeaderText = "ORÇAMENTO", DataPropertyName = "Orcamento", Width = Dpi(100), MinimumWidth = Dpi(80), ReadOnly = true },
+                new DataGridViewTextBoxColumn { Name = "colCliente", HeaderText = "CLIENTE", DataPropertyName = "Cliente", Width = Dpi(220), MinimumWidth = Dpi(120), ReadOnly = true },
+                new DataGridViewTextBoxColumn { Name = "colFantasia", HeaderText = "NOME FANTASIA", DataPropertyName = "NomeFantasia", Width = Dpi(200), MinimumWidth = Dpi(100), ReadOnly = true },
+                new DataGridViewTextBoxColumn { Name = "colRota", HeaderText = "ROTA", DataPropertyName = "Rota", Width = Dpi(120), MinimumWidth = Dpi(80), ReadOnly = true },
+                new DataGridViewTextBoxColumn { Name = "colNfe", HeaderText = "Nº NF-e", DataPropertyName = "NumeroNfe", Width = Dpi(110), MinimumWidth = Dpi(70), ReadOnly = true }
             );
 
             // O CheckBoxCell só grava o valor ao fim da edição, e o CellContentClick não
@@ -377,22 +377,22 @@ namespace CONTROLE_DE_PEDIDOS
                 StartPosition = FormStartPosition.CenterParent,
                 BackColor = Theme.BgDark,
                 ForeColor = Theme.TextPrimary,
-                Font = Theme.FontRegular,
-                ClientSize = new Size(350, 140)
+                Font = Theme.FontRegular
             };
+            dialog.ClientSize = dialog.Px(new Size(350, 140));
 
             var lblRota = new Label
             {
                 Text = "Marcar pedidos da rota:",
-                Location = new Point(16, 16),
+                Location = dialog.Px(new Point(16, 16)),
                 AutoSize = true,
                 ForeColor = Theme.TextPrimary
             };
 
             var cmbRota = new ComboBox
             {
-                Location = new Point(16, 42),
-                Size = new Size(318, 28),
+                Location = dialog.Px(new Point(16, 42)),
+                Size = dialog.Px(new Size(318, 28)),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = Theme.BgInput,
                 ForeColor = Theme.TextPrimary,
@@ -404,8 +404,8 @@ namespace CONTROLE_DE_PEDIDOS
             var btnCancelar = new Button
             {
                 Text = "Cancelar",
-                Size = new Size(90, 32),
-                Location = new Point(244, 88),
+                Size = dialog.Px(new Size(90, 32)),
+                Location = dialog.Px(new Point(244, 88)),
                 DialogResult = DialogResult.Cancel
             };
             Theme.EstilizarBotao(btnCancelar);
@@ -413,8 +413,8 @@ namespace CONTROLE_DE_PEDIDOS
             var btnOk = new Button
             {
                 Text = "Confirmar",
-                Size = new Size(90, 32),
-                Location = new Point(146, 88),
+                Size = dialog.Px(new Size(90, 32)),
+                Location = dialog.Px(new Point(146, 88)),
                 DialogResult = DialogResult.OK
             };
             Theme.EstilizarBotao(btnOk, primario: true);
