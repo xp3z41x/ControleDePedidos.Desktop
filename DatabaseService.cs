@@ -62,6 +62,7 @@ namespace CONTROLE_DE_PEDIDOS
         /// <summary>1 = a próxima verificação publica StatusAlterado mesmo sem mudança
         /// (após trocar a config o Form1 zera o estado e só recarrega ao receber o evento).</summary>
         private int _forcarNotificacaoStatus;
+        private int _falhasGarantirBanco;
 
         // --- LISTEN/NOTIFY: avisa as outras instâncias quando alguém grava algo ---
         private const string CanalMudancas = "cp_mudou";
@@ -302,11 +303,11 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (okIntegra)
                 {
+                    // Só marca como garantido se deu certo: antes o true era gravado mesmo
+                    // após falha (o catch interno zerava e a linha seguinte sobrescrevia),
+                    // e o banco nunca mais era criado até trocar a configuração.
                     if (!_bancoControleGarantido)
-                    {
-                        await GarantirBancoControleAsync().ConfigureAwait(false);
-                        _bancoControleGarantido = true;
-                    }
+                        _bancoControleGarantido = await GarantirBancoControleAsync().ConfigureAwait(false);
                     okControle = await TestarConexaoAsync(_config.ConnectionStringControle).ConfigureAwait(false);
                 }
 
@@ -341,7 +342,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
         }
 
-        private async Task GarantirBancoControleAsync()
+        private async Task<bool> GarantirBancoControleAsync()
         {
             try
             {
@@ -355,14 +356,21 @@ namespace CONTROLE_DE_PEDIDOS
                 if (await cmdCheck.ExecuteScalarAsync().ConfigureAwait(false) == null)
                 {
                     using var cmdCreate = conn.CreateCommand();
-                    cmdCreate.CommandText = $"CREATE DATABASE \"{_config.BancoControle}\" ENCODING 'UTF8'";
+                    // Identificador não aceita parâmetro: escapa aspas duplas (nome vem do INI).
+                    var nome = _config.BancoControle.Replace("\"", "\"\"");
+                    cmdCreate.CommandText = $"CREATE DATABASE \"{nome}\" ENCODING 'UTF8'";
                     await cmdCreate.ExecuteNonQueryAsync().ConfigureAwait(false);
                 }
+                _falhasGarantirBanco = 0;
+                return true;
             }
             catch (Exception ex)
             {
-                _bancoControleGarantido = false;
-                Logger.Error("Erro ao garantir a existência do banco de controle", ex);
+                // Agora retenta a cada ciclo (15s): loga a 1ª falha e depois ~a cada 10 min,
+                // para uma falha persistente (ex.: sem acesso ao banco postgres) não inundar o log.
+                if (_falhasGarantirBanco++ % 40 == 0)
+                    Logger.Error("Erro ao garantir a existência do banco de controle", ex);
+                return false;
             }
         }
 
