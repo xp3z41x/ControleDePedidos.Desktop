@@ -11,6 +11,11 @@ namespace CONTROLE_DE_PEDIDOS
         private static readonly string FilePath = Path.Combine(DirPath, "column-widths.json");
 
         private static Dictionary<string, Dictionary<string, int>> _data = [];
+        // System.Timers.Timer dispara no ThreadPool: o Elapsed serializava _data enquanto
+        // a UI chamava SetWidth (arrastando a coluna) → "Collection was modified",
+        // engolida no catch, e a largura não era salva. Tudo que toca _data/_dirty
+        // passa por este lock (incluindo o Flush do encerramento x Elapsed pendente).
+        private static readonly object _sync = new();
         private static readonly System.Timers.Timer _debounce = new(500) { AutoReset = false };
         private static bool _dirty;
 
@@ -25,36 +30,42 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 if (!File.Exists(FilePath)) return;
 
-                var json = File.ReadAllText(FilePath);
-                _data = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, int>>>(json) ?? [];
+                var json = ArquivoAtomico.LerTexto(FilePath);
+                var lido = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, int>>>(json) ?? [];
+                lock (_sync) _data = lido;
             }
             catch
             {
-                _data = [];
+                lock (_sync) _data = [];
             }
         }
 
         public static bool HasWidths(string gridKey)
         {
-            return _data.ContainsKey(gridKey) && _data[gridKey].Count > 0;
+            lock (_sync)
+                return _data.TryGetValue(gridKey, out var cols) && cols.Count > 0;
         }
 
         public static bool TryGetWidth(string gridKey, string columnName, out int width)
         {
             width = 0;
-            return _data.TryGetValue(gridKey, out var cols) && cols.TryGetValue(columnName, out width);
+            lock (_sync)
+                return _data.TryGetValue(gridKey, out var cols) && cols.TryGetValue(columnName, out width);
         }
 
         public static void SetWidth(string gridKey, string columnName, int width)
         {
-            if (!_data.TryGetValue(gridKey, out var cols))
+            lock (_sync)
             {
-                cols = [];
-                _data[gridKey] = cols;
-            }
+                if (!_data.TryGetValue(gridKey, out var cols))
+                {
+                    cols = [];
+                    _data[gridKey] = cols;
+                }
 
-            cols[columnName] = width;
-            _dirty = true;
+                cols[columnName] = width;
+                _dirty = true;
+            }
             _debounce.Stop();
             _debounce.Start();
         }
@@ -62,18 +73,24 @@ namespace CONTROLE_DE_PEDIDOS
         public static void Flush()
         {
             _debounce.Stop();
-            if (_dirty) SalvarInterno();
+            SalvarInterno();
         }
 
         private static void SalvarInterno()
         {
             try
             {
-                Directory.CreateDirectory(DirPath);
-                var options = new JsonSerializerOptions { WriteIndented = true };
-                var json = JsonSerializer.Serialize(_data, options);
-                File.WriteAllText(FilePath, json);
-                _dirty = false;
+                lock (_sync)
+                {
+                    if (!_dirty) return;
+                    Directory.CreateDirectory(DirPath);
+                    var options = new JsonSerializerOptions { WriteIndented = true };
+                    var json = JsonSerializer.Serialize(_data, options);
+                    // Atômico: queda no meio da gravação deixava JSON truncado e o
+                    // Carregar descartava TODAS as larguras salvas.
+                    ArquivoAtomico.GravarTexto(FilePath, json);
+                    _dirty = false;
+                }
             }
             catch
             {
