@@ -1927,13 +1927,32 @@ namespace CONTROLE_DE_PEDIDOS
             dialog.ShowDialog(this);
         }
 
-        private void BtnConfig_Click(object? sender, EventArgs e)
+        private async void BtnConfig_Click(object? sender, EventArgs e)
         {
             using var dialog = new ConfigDialog(_db.Config);
-            if (dialog.ShowDialog(this) == DialogResult.OK)
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+            _db.AtualizarConfig(dialog.Config);
+
+            // Antes: _dadosIniciaisCarregados = false, esperando a "próxima verificação de
+            // conexão" recarregar. Mas StatusAlterado só dispara quando o status MUDA —
+            // salvando com a conexão ok nada disparava, e com a flag em false o
+            // AgendarProximoRefresh deixava de religar o timer e as notificações eram
+            // descartadas: o auto-refresh morria até reabrir o app (e a filial/orçamento
+            // mínimo novos não eram aplicados). Se o status mudar, Db_StatusAlterado cuida.
+            if (!_dadosIniciaisCarregados) return;
+
+            try
             {
-                _db.AtualizarConfig(dialog.Config);
-                _dadosIniciaisCarregados = false; // Força recarregamento na próxima verificação de conexão
+                _assinaturaOrcamentos = "";
+                _assinaturaPedidos = "";
+                LimparDetalhes();
+                await RecarregarDadosAsync();
+                if (_db.IntegraConectado) AgendarProximoRefresh();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao recarregar após salvar a configuração", ex);
             }
         }
 
