@@ -229,7 +229,15 @@ namespace CONTROLE_DE_PEDIDOS
                     }
 
                     if (falhasSeguidas > 0)
+                    {
                         Logger.Info("Escuta de mudanças restabelecida.");
+                        // NOTIFY não é enfileirado para quem não está escutando: o que
+                        // outros operadores gravaram durante a queda se perdeu. Pede um
+                        // refresh (o dirty-check do Form1 descarta se nada mudou) em vez
+                        // de esperar o timer de segurança, que pode estar em backoff.
+                        try { MudancaNotificada?.Invoke(this, "reconexao"); }
+                        catch (Exception ex) { Logger.Warn($"Erro no handler de notificação: {ex.Message}"); }
+                    }
                     falhasSeguidas = 0;
 
                     // Bloqueia até chegar notificação (ou a conexão cair)
