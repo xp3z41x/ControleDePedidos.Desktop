@@ -214,11 +214,64 @@ namespace CONTROLE_DE_PEDIDOS
         /// </summary>
         public static string? EncontrarImpressoraA4Capaz()
         {
-            string? padrao = ObterNomeImpressoraPadrao();
             var instaladas = PrinterSettings.InstalledPrinters.Cast<string>().ToList();
-            var (nome, motivo, _) = EscolherImpressoraA4(padrao, instaladas, ConsultarSuporteA4);
-            Logger.Info($"Impressora A4: '{nome ?? "(nenhuma)"}' — {motivo}");
+            string? padrao = ObterNomeImpressoraPadrao(instaladas);
+
+            lock (_lockSelecao)
+            {
+                if (_selecaoCache is { } c)
+                {
+                    bool padraoIgual = string.Equals(c.Padrao, padrao, StringComparison.OrdinalIgnoreCase);
+                    bool escolhidaExiste = c.Nome == null
+                        || instaladas.Contains(c.Nome, StringComparer.OrdinalIgnoreCase);
+                    if (padraoIgual && escolhidaExiste) return c.Nome;
+
+                    // Padrão mudou (ou a escolhida sumiu da sessão RDS): recomeça do zero —
+                    // tamanhos de papel também podem ter mudado (driver trocado, etc.).
+                    Logger.Info($"Cache de impressoras invalidado: padrão '{c.Padrao}' → '{padrao}'" +
+                        (escolhidaExiste ? "" : $", '{c.Nome}' não está mais instalada"));
+                    _selecaoCache = null;
+                    _cacheSuportaA4.Clear();
+                }
+            }
+
+            var (nome, motivo, completa) = EscolherImpressoraA4(padrao, instaladas, SuportaA4ComCache);
+            Logger.Info($"Impressora A4: '{nome ?? "(nenhuma)"}' — {motivo}" +
+                (completa ? "" : " [consulta falhou; não cacheado]"));
+
+            // Só cacheia escolha feita sem falhas de consulta — senão a próxima tenta de novo.
+            if (completa)
+                lock (_lockSelecao) _selecaoCache = (padrao, nome);
             return nome;
+        }
+
+        // ── Cache por sessão do processo ──────────────────────────────────────────
+        // Consultar PaperSizes de 16 impressoras de REDE custava segundos a cada
+        // relatório. Cacheia (a) se cada impressora declara A4 e (b) a escolha final,
+        // chaveada pela impressora padrão. Invalidação: padrão mudou, escolhida sumiu
+        // da lista instalada, falha de consulta (nunca cacheada) ou InvalidarCacheImpressoras().
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _cacheSuportaA4 =
+            new(StringComparer.OrdinalIgnoreCase);
+        private static readonly object _lockSelecao = new();
+        private static (string? Padrao, string? Nome)? _selecaoCache;
+
+        /// <summary>Descarta todo o cache de impressoras (próxima seleção reconsulta tudo).</summary>
+        public static void InvalidarCacheImpressoras()
+        {
+            lock (_lockSelecao)
+            {
+                _selecaoCache = null;
+                _cacheSuportaA4.Clear();
+            }
+        }
+
+        private static bool? SuportaA4ComCache(string nome)
+        {
+            if (_cacheSuportaA4.TryGetValue(nome, out var v)) return v;
+            var r = ConsultarSuporteA4(nome);
+            if (r is bool ok) _cacheSuportaA4[nome] = ok;
+            else _cacheSuportaA4.TryRemove(nome, out _);
+            return r;
         }
 
         /// <summary>
@@ -273,13 +326,12 @@ namespace CONTROLE_DE_PEDIDOS
         /// houver (o getter de <see cref="PrinterSettings.PrinterName"/> devolve um
         /// texto tipo "&lt;no default printer&gt;" nesse caso — não é nome instalado).
         /// </summary>
-        internal static string? ObterNomeImpressoraPadrao()
+        internal static string? ObterNomeImpressoraPadrao(IReadOnlyList<string> instaladas)
         {
             try
             {
                 var nome = new PrinterSettings().PrinterName;
-                return PrinterSettings.InstalledPrinters.Cast<string>()
-                    .Any(n => string.Equals(n, nome, StringComparison.OrdinalIgnoreCase)) ? nome : null;
+                return instaladas.Contains(nome, StringComparer.OrdinalIgnoreCase) ? nome : null;
             }
             catch (Exception ex)
             {
