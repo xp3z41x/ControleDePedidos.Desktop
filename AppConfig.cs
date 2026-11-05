@@ -188,7 +188,7 @@ namespace CONTROLE_DE_PEDIDOS
     /// </summary>
     internal static class ArquivoAtomico
     {
-        private const int Tentativas = 6;
+        private const int Tentativas = 10;   // ~1,5 s no pior caso
 
         public static void GravarTexto(string caminho, string conteudo)
         {
