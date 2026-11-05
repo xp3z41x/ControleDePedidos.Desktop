@@ -446,25 +446,58 @@ namespace CONTROLE_DE_PEDIDOS
             _pedidosTodos = resultado;
         }
 
+        // Pedidos de recarga que chegaram com outra recarga em andamento. Antes eram
+        // descartados em silêncio: um refresh já em voo podia ter lido o banco ANTES da
+        // mudança que motivou o novo pedido (notificação, restauração de ignorado,
+        // conflito "a tela será atualizada"...), e a tela ficava velha até o próximo timer.
+        private bool _recarregarOrcamentosPendente;
+        private bool _recarregarPedidosPendente;
+
         private async Task RecarregarDadosAsync(bool recarregarOrcamentos = true, bool recarregarPedidos = true)
         {
-            if (_recarregando) return;
+            if (_recarregando)
+            {
+                _recarregarOrcamentosPendente |= recarregarOrcamentos;
+                _recarregarPedidosPendente |= recarregarPedidos;
+                return;
+            }
             _recarregando = true;
-            
-            // TODO: Considerar desabilitar botões ou mostrar um indicador de loading
 
             try
             {
-                var tasks = new List<Task>();
-                if (recarregarOrcamentos) tasks.Add(CarregarOrcamentosAsync());
-                if (recarregarPedidos) tasks.Add(CarregarPedidosAsync());
+                while (recarregarOrcamentos || recarregarPedidos)
+                {
+                    var tasks = new List<Task>();
+                    if (recarregarOrcamentos) tasks.Add(CarregarOrcamentosAsync());
+                    if (recarregarPedidos) tasks.Add(CarregarPedidosAsync());
 
-                await Task.WhenAll(tasks);
+                    await Task.WhenAll(tasks);
+
+                    // Pedidos enfileirados durante esta passada: mais uma rodada.
+                    recarregarOrcamentos = _recarregarOrcamentosPendente;
+                    recarregarPedidos = _recarregarPedidosPendente;
+                    _recarregarOrcamentosPendente = false;
+                    _recarregarPedidosPendente = false;
+                }
             }
             finally
             {
                 _recarregando = false;
             }
+        }
+
+        /// <summary>
+        /// Chamar logo após uma escrita local bem-sucedida (o próprio app atualiza os
+        /// objetos em memória). Se havia recarga em voo, ela pode ter lido o banco antes
+        /// da escrita e sobrescreveria o estado novo com o antigo — como a notificação da
+        /// própria instância é descartada, ninguém corrigiria até o próximo timer.
+        /// Enfileira mais uma passada para depois dela.
+        /// </summary>
+        private void InvalidarRecargaEmAndamento()
+        {
+            if (!_recarregando) return;
+            _recarregarOrcamentosPendente = true;
+            _recarregarPedidosPendente = true;
         }
 
         /// <summary>
@@ -572,6 +605,7 @@ namespace CONTROLE_DE_PEDIDOS
                 if (linhas > 0)
                 {
                     // Atualiza o estado local e as grids manualmente para evitar um refresh completo
+                    InvalidarRecargaEmAndamento();
                     _aprovados.Add(orc.Orcamento);
 
                     // Remove do grid de orçamentos
@@ -635,6 +669,7 @@ namespace CONTROLE_DE_PEDIDOS
                 _db.NotificarMudanca("ignorados");   // some da lista de pendentes dos outros
 
                 // Atualiza o estado local e a grid manualmente
+                InvalidarRecargaEmAndamento();
                 _ignorados.Add(orc.Orcamento);
                 if (dgvOrcamentos.DataSource is SortableBindingList<OrcamentoResumo> listaOrcamentos)
                 {
@@ -684,7 +719,7 @@ namespace CONTROLE_DE_PEDIDOS
             else if (e.StatusControle == StatusConexao.Conectado && _dadosIniciaisCarregados)
             {
                 _ = _db.GarantirTabelasAsync();
-                await CarregarPedidosAsync();
+                await RecarregarDadosAsync(recarregarOrcamentos: false);
             }
 
             if (e.StatusIntegra == StatusConexao.Desconectado)
@@ -753,6 +788,7 @@ namespace CONTROLE_DE_PEDIDOS
                 if (linhas > 0)
                 {
                     // Atualiza o objeto na lista e notifica a grid
+                    InvalidarRecargaEmAndamento();
                     pedido.Rota = dialog.RotaSelecionada;
                     AplicarFiltros();
                 }
@@ -760,7 +796,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido foi alterado ou excluído por outro usuário.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -812,10 +848,11 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     _pedidosTodos.RemoveAll(p => p.Orcamento == pedido.Orcamento);
                     AtualizarOpcoesDropdowns();
                     AplicarFiltros();
-                    await CarregarOrcamentosAsync();
+                    await RecarregarDadosAsync(recarregarPedidos: false);
                 }
                 else
                 {
@@ -862,6 +899,7 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     pedido.Travado = true;
                     AplicarFiltros();
                 }
@@ -869,7 +907,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido já foi travado ou excluído por outro usuário.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -910,6 +948,7 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     pedido.Travado = false;
                     AplicarFiltros();
                 }
@@ -917,7 +956,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido já foi destravado ou excluído por outro usuário.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -997,13 +1036,14 @@ namespace CONTROLE_DE_PEDIDOS
                     case "conferido": pedido.Conferido = true; break;
                     case "liberado": pedido.Liberado = true; break;
                 }
+                InvalidarRecargaEmAndamento();
                 AplicarFiltros();
                 return true;
             }
 
             MessageBox.Show(this, "O status deste pedido foi alterado por outro usuário.\nA tela será atualizada.",
                 "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            await CarregarPedidosAsync();
+            await RecarregarDadosAsync(recarregarOrcamentos: false);
             return false;
         }
 
@@ -1072,13 +1112,14 @@ namespace CONTROLE_DE_PEDIDOS
                         case "em_separacao": pedido.EmSeparacao = false; break;
                         case "aprovado": pedido.Aprovado = false; break;
                     }
+                    InvalidarRecargaEmAndamento();
                     AplicarFiltros();
                 }
                 else
                 {
                     MessageBox.Show(this, "O status deste pedido foi alterado por outro usuário.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -1129,6 +1170,7 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     pedido.EmFaturamento = true;
                     AplicarFiltros();
                 }
@@ -1136,7 +1178,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido já foi assumido por outro operador.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -1170,6 +1212,7 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     pedido.EmFaturamento = false;
                     AplicarFiltros();
                 }
@@ -1177,7 +1220,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido já foi largado por outro operador.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
