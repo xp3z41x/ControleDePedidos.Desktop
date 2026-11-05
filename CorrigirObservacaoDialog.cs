@@ -143,14 +143,21 @@ namespace CONTROLE_DE_PEDIDOS
                 return;
             }
 
-            var observacao = txtObservacao.Text.Trim();
-            if (string.IsNullOrEmpty(observacao))
+            // A observação é o nº do orçamento (convenção fiscal usada na correlação de
+            // NF-e: estmov.observacao IN ('123', ...)). Grava SEMPRE a forma canônica do
+            // número: "000123" passaria no filtro de dígitos mas nunca casaria no IN, e
+            // "0" não é orçamento — ambos deixavam a NF-e do pedido invisível.
+            var textoObs = txtObservacao.Text.Trim();
+            if (!int.TryParse(textoObs, out int orcamentoObs) || orcamentoObs <= 0)
             {
-                MessageBox.Show(this, "Informe a nova observação.",
+                MessageBox.Show(this, string.IsNullOrEmpty(textoObs)
+                        ? "Informe a nova observação."
+                        : "Observação inválida: informe um número de orçamento maior que zero.",
                     "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 txtObservacao.Focus();
                 return;
             }
+            var observacao = orcamentoObs.ToString();
 
             var confirmar = MessageBox.Show(this,
                 $"Gravar observação '{observacao}' no pedido {pedido} da filial fiscal {_db.Config.FilialFiscal}?\n\nEsta ação sobrescreve qualquer valor atual de observação.",
