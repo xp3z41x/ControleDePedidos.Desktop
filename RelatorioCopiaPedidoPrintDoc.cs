@@ -441,7 +441,13 @@ namespace CONTROLE_DE_PEDIDOS
         {
             string digitos = _cab.Orcamento.ToString();
             float bcLargura = Code128.MedirLargura(digitos, BarcodeModulo);
-            float larguraDireita = Math.Max(bcLargura + QuietZone * 2f, 180f);
+            // Bloco direito largo o bastante para "PEDIDO Nº ..." em 14pt: com 180 fixo,
+            // orçamentos de 6+ dígitos saíam truncados ("PEDIDO Nº 7654…") no Graphics
+            // da impressora. Medido no MESMO Graphics nos dois modos (sem deriva).
+            string tituloPedido = $"PEDIDO Nº {_cab.Orcamento}";
+            float larguraTitulo = g.MeasureString(tituloPedido, FontTitulo).Width + 4f;
+            float larguraDireita = Math.Min(larguraTotal * 0.45f,
+                Math.Max(Math.Max(bcLargura + QuietZone * 2f, 180f), larguraTitulo));
             float xDireita = x + larguraTotal - larguraDireita;
 
             // Esquerda: logomarca (slot some quando o recurso não existe)
@@ -485,7 +491,7 @@ namespace CONTROLE_DE_PEDIDOS
             if (!medir) g.DrawString("CÓPIA DE PEDIDO", FontSubtitulo, Brushes.Black,
                 new RectangleF(xDireita, yDireita, larguraDireita, lhSubtitulo), sfDireita);
             yDireita += lhSubtitulo;
-            if (!medir) g.DrawString($"PEDIDO Nº {_cab.Orcamento}", FontTitulo, Brushes.Black,
+            if (!medir) g.DrawString(tituloPedido, FontTitulo, Brushes.Black,
                 new RectangleF(xDireita, yDireita, larguraDireita, lhTitulo), sfDireita);
             yDireita += lhTitulo;
             if (!medir) g.DrawString($"{RotuloData} {_cab.DataPedido}", FontEmpresa, Brushes.Black,
