@@ -159,17 +159,42 @@ namespace CONTROLE_DE_PEDIDOS
             }
             var observacao = orcamentoObs.ToString();
 
-            var confirmar = MessageBox.Show(this,
-                $"Gravar observação '{observacao}' no pedido {pedido} da filial fiscal {_db.Config.FilialFiscal}?\n\nEsta ação sobrescreve qualquer valor atual de observação.",
-                "Confirmar Gravação", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (confirmar != DialogResult.Yes) return;
-
             btnGravar.Enabled = false;
             btnCancelar.Enabled = false;
             _gravando = true;
             try
             {
+                // Prévia somente leitura (conexão read-only do Integra) com os MESMOS
+                // filtros do UPDATE: o operador vê o que vai sobrescrever e quantas
+                // linhas do estmov serão tocadas antes de confirmar.
+                var previa = await ConsultarPreviaAsync(pedido);
+                int totalPrevisto = previa.Sum(p => p.Linhas);
+                if (totalPrevisto == 0)
+                {
+                    MessageBox.Show(this,
+                        $"Nenhum registro do estmov encontrado com pedido {pedido} na filial fiscal {_db.Config.FilialFiscal}.\n\nNada foi gravado.",
+                        "Nada a alterar", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var atuais = string.Join("\n", previa.Take(MaxValoresPrevia).Select(p =>
+                    $"   • {(p.Observacao.Length == 0 ? "(vazia)" : $"'{p.Observacao}'")} — {p.Linhas} linha(s)"));
+                if (previa.Count > MaxValoresPrevia)
+                    atuais += $"\n   • … e mais {previa.Count - MaxValoresPrevia} valor(es) diferente(s)";
+
+                var confirmar = MessageBox.Show(this,
+                    $"Pedido {pedido} — filial fiscal {_db.Config.FilialFiscal}\n\n" +
+                    $"Observação atual:\n{atuais}\n\n" +
+                    $"Nova observação: '{observacao}'\n" +
+                    $"Linhas do estmov que serão alteradas: {totalPrevisto}\n\n" +
+                    "Esta ação sobrescreve o valor atual. Confirmar a gravação?",
+                    "Confirmar Gravação", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2);
+                if (confirmar != DialogResult.Yes) return;
+
                 int linhas = await _db.AtualizarObservacaoEstmovAsync(pedido, observacao);
+                if (linhas > 0 && linhas != totalPrevisto)
+                    Logger.Warn($"Corrigir Observação: prévia contou {totalPrevisto} linha(s) do pedido {pedido}, UPDATE alterou {linhas}");
                 if (linhas > 0)
                 {
                     MessageBox.Show(this, $"{linhas} registro(s) atualizado(s).",
@@ -196,6 +221,39 @@ namespace CONTROLE_DE_PEDIDOS
                 btnGravar.Enabled = true;
                 btnCancelar.Enabled = true;
             }
+        }
+
+        private const int MaxValoresPrevia = 5;
+
+        private sealed record ValorObservacao(string Observacao, int Linhas);
+
+        /// <summary>
+        /// Valores atuais de estmov.observacao (agrupados) com os mesmos filtros de
+        /// <see cref="DatabaseService.AtualizarObservacaoEstmovAsync"/>. Roda na conexão
+        /// somente leitura do Integra — sem efeito colateral.
+        /// </summary>
+        private async Task<List<ValorObservacao>> ConsultarPreviaAsync(int pedido)
+        {
+            int filial = _db.Config.FilialFiscal;
+            var lista = await _db.ConsultarIntegraAsync(async conn =>
+            {
+                var result = new List<ValorObservacao>();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT COALESCE(TRIM(observacao::text), '') AS obs, COUNT(*)::int
+                      FROM estmov
+                     WHERE filial = @filial
+                       AND pedido = @pedido
+                     GROUP BY 1
+                     ORDER BY 2 DESC, 1";
+                cmd.Parameters.AddWithValue("filial", filial);
+                cmd.Parameters.AddWithValue("pedido", pedido);
+                using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                    result.Add(new ValorObservacao(reader.GetString(0), reader.GetInt32(1)));
+                return result;
+            });
+            return lista ?? [];
         }
 
         // Durante o UPDATE no Integra o "X"/Alt+F4 ficaria ativo (só os botões são
