@@ -254,14 +254,22 @@ namespace CONTROLE_DE_PEDIDOS
                     dgvOrcamentos.SkipAutoAdjust = false;
                     dgvOrcamentos.ResumeLayout(true);
                 }
+
+                SincronizarDetalhesComSelecao(dgvOrcamentos);
             }
             catch (Exception ex)
             {
-                _assinaturaOrcamentos = "";
-                dgvOrcamentos.DataSource = null;
-                lblContagem.Text = "";
-                Logger.Error("Erro ao carregar orçamentos", ex);
+                // Erro transitório (rede, timeout, failover) não pode esvaziar o grid: o
+                // operador perderia a seleção e o scroll a cada soluço. Mantém os últimos
+                // dados, marca o contador como desatualizado e invalida a assinatura para
+                // que o próximo refresh bem-sucedido rebinde de qualquer jeito.
+                _assinaturaOrcamentos = AssinaturaInvalida;
+                IndicarDesatualizado(lblContagem, true);
+                Logger.Error("Erro ao carregar orçamentos (mantidos os últimos dados exibidos)", ex);
+                return;
             }
+
+            IndicarDesatualizado(lblContagem, false);
         }
 
         private async Task CarregarAprovadosAsync()
@@ -416,11 +424,45 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
-                _pedidosTodos = [];
-                _assinaturaPedidos = "";
-                dgvPedidos.DataSource = null;
-                lblContagemPedidos.Text = "";
-                Logger.Error("Erro ao carregar pedidos", ex);
+                // Mesma lógica dos orçamentos: mantém _pedidosTodos e o grid (as referências
+                // bindadas continuam válidas), só sinaliza que podem estar desatualizados.
+                _assinaturaPedidos = AssinaturaInvalida;
+                IndicarDesatualizado(lblContagemPedidos, true);
+                Logger.Error("Erro ao carregar pedidos (mantidos os últimos dados exibidos)", ex);
+                return;
+            }
+
+            IndicarDesatualizado(lblContagemPedidos, false);
+        }
+
+        /// <summary>
+        /// Valor que nunca coincide com uma assinatura real (nem com a de lista vazia, que é
+        /// ""): força o próximo refresh bem-sucedido a rebindar após uma falha.
+        /// </summary>
+        private const string AssinaturaInvalida = "\u0000";
+
+        private const string SufixoDesatualizado = " · desatualizado";
+
+        /// <summary>
+        /// Indicativo discreto de falha no refresh: sufixo + cor de aviso no rótulo de
+        /// contagem do grid. Idempotente nos dois sentidos; o texto-base é preservado
+        /// porque outros caminhos (RemoverOrcamentoDoGrid, AplicarFiltros) o reescrevem.
+        /// </summary>
+        private static void IndicarDesatualizado(Label lbl, bool desatualizado)
+        {
+            string texto = lbl.Text;
+            bool marcado = texto.EndsWith(SufixoDesatualizado, StringComparison.Ordinal);
+            if (desatualizado)
+            {
+                if (!marcado)
+                    lbl.Text = (texto.Length > 0 ? texto : "dados") + SufixoDesatualizado;
+                lbl.ForeColor = Theme.Warning;
+            }
+            else if (marcado || lbl.ForeColor != Theme.TextMuted)
+            {
+                if (marcado)
+                    lbl.Text = texto[..^SufixoDesatualizado.Length];
+                lbl.ForeColor = Theme.TextMuted;
             }
         }
 
@@ -701,6 +743,8 @@ namespace CONTROLE_DE_PEDIDOS
                     lista.RemoveAt(i);
             }
             lblContagem.Text = $"{lista.Count} registro{(lista.Count != 1 ? "s" : "")}";
+            // Removendo a última linha o SelectionChanged chega sem item e o painel ficava no removido.
+            SincronizarDetalhesComSelecao(dgvOrcamentos);
         }
 
         private async void BtnIgnorar_Click(object? sender, EventArgs e)
@@ -1380,6 +1424,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private int _orcamentoDetalheAtual;
 
+        /// <summary>Grid cuja seleção o painel de detalhes está espelhando (o último em que o usuário selecionou).</summary>
+        private DataGridView? _gridDetalhe;
+
         private async void BtnImprimirSeparacao_Click(object? sender, EventArgs e)
         {
             using var acao = TentarIniciarAcao();
@@ -1804,7 +1851,37 @@ namespace CONTROLE_DE_PEDIDOS
             else if (sender == dgvPedidos && dgvPedidos.CurrentRow?.DataBoundItem is PedidoControlado ped)
                 orcamento = ped.Orcamento;
 
-            if (orcamento == null || orcamento == _orcamentoDetalheAtual) return;
+            if (orcamento == null) return;
+            _gridDetalhe = (DataGridView)sender!;
+            if (orcamento == _orcamentoDetalheAtual) return;
+            _orcamentoDetalheAtual = orcamento.Value;
+            _ = CarregarDetalhesAsync(orcamento.Value);
+        }
+
+        /// <summary>
+        /// Chamado depois de um refresh do <paramref name="grid"/> (que roda com
+        /// SelectionChanged suprimido). Se o pedido exibido sumiu e o grid pulou para
+        /// outra linha, o painel continuava mostrando o pedido antigo; agora acompanha a
+        /// linha corrente, ou é limpo se o grid ficou sem seleção. Só age se o painel está
+        /// espelhando este grid — o refresh do outro grid não rouba o painel.
+        /// </summary>
+        private void SincronizarDetalhesComSelecao(DataGridView grid)
+        {
+            if (_gridDetalhe != grid) return;
+
+            int? orcamento = grid.CurrentRow?.DataBoundItem switch
+            {
+                OrcamentoResumo o => o.Orcamento,
+                PedidoControlado p => p.Orcamento,
+                _ => null
+            };
+
+            if (orcamento == null)
+            {
+                if (_orcamentoDetalheAtual != 0) LimparDetalhes();
+                return;
+            }
+            if (orcamento == _orcamentoDetalheAtual) return;
             _orcamentoDetalheAtual = orcamento.Value;
             _ = CarregarDetalhesAsync(orcamento.Value);
         }
@@ -2089,6 +2166,8 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 _suprimirSelectionChanged = false;
             }
+
+            SincronizarDetalhesComSelecao(dgvPedidos);
 
             int total = _pedidosTodos.Count;
             int mostrados = filtrados.Count;
