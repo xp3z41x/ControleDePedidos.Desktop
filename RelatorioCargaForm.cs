@@ -212,6 +212,9 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 Name = "colSelecionar",
                 HeaderText = "",
+                // Bindada ao item: coluna não-bindada perde as marcações quando o grid é
+                // reordenado (clique no cabeçalho -> ResetBindings recria as linhas).
+                DataPropertyName = nameof(PedidoCarga.Selecionado),
                 Width = 40,
                 MinimumWidth = 40,
                 ReadOnly = false,
@@ -546,5 +549,8 @@ namespace CONTROLE_DE_PEDIDOS
         public string Cidade { get; set; } = "";
         public string NumeroPedido { get; set; } = "";
         public string Volumes { get; set; } = "";
+
+        /// <summary>Marcação do checkbox do grid (estado de UI, não vem do banco).</summary>
+        public bool Selecionado { get; set; }
     }
 }
