@@ -381,7 +381,8 @@ namespace CONTROLE_DE_PEDIDOS
         ///
         /// <paramref name="reaplicarPageSettings"/> roda após o OK do PrintDialog,
         /// que reescreve DefaultPageSettings — o callback DEVE re-forçar PaperSize A4,
-        /// Landscape e Margins do relatório em questão.
+        /// Landscape e Margins do relatório em questão. Em seguida o preview é
+        /// invalidado e regerado com a impressora escolhida.
         /// </summary>
         public static void ExibirPreviewComImpressao(Form owner, PrintDocument doc,
             string contextoLog, Action reaplicarPageSettings)
@@ -413,18 +414,34 @@ namespace CONTROLE_DE_PEDIDOS
                     if (dlgImpressao.ShowDialog(preview) != DialogResult.OK) return;
 
                     reaplicarPageSettings();
-
-                    if (!ImpressoraSuportaA4(doc))
+                    try
                     {
-                        var continuar = MessageBox.Show(preview,
-                            $"A impressora '{doc.PrinterSettings.PrinterName}' não declara suporte a papel A4.\n" +
-                            "O documento pode ser impresso de forma incorreta ou rejeitado pelo driver.\n\n" +
-                            "Imprimir mesmo assim?",
-                            "Aviso", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-                        if (continuar != DialogResult.Yes) return;
-                    }
+                        if (!ImpressoraSuportaA4(doc))
+                        {
+                            var continuar = MessageBox.Show(preview,
+                                $"A impressora '{doc.PrinterSettings.PrinterName}' não declara suporte a papel A4.\n" +
+                                "O documento pode ser impresso de forma incorreta ou rejeitado pelo driver.\n\n" +
+                                "Imprimir mesmo assim?",
+                                "Aviso", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                            if (continuar != DialogResult.Yes) return;
+                        }
 
-                    ImprimirDocumento(preview, doc, $"{contextoLog} (confirmado)");
+                        ImprimirDocumento(preview, doc, $"{contextoLog} (confirmado)");
+                    }
+                    finally
+                    {
+                        // A impressora/orientação podem ter mudado: a área imprimível (e com
+                        // ela largura de colunas e paginação) é outra — o preview ficaria
+                        // mostrando a impressora antiga. InvalidatePreview agenda um job NOVO
+                        // de PreviewPrintController (OnBeginPrint → GeometriaPagina.Medir de
+                        // novo, contrato por job preservado) via BeginInvoke.
+                        // Fica no finally, DEPOIS do job real, de propósito: se fosse antes,
+                        // qualquer bombeamento de mensagens durante o job real (diálogo de
+                        // driver no StartDoc) poderia rodar o job de preview no MESMO
+                        // PrintDocument no meio do real — OnBeginPrint zeraria o estado de
+                        // paginação e corromperia a impressão.
+                        preview.PrintPreviewControl.InvalidatePreview();
+                    }
                 };
                 barraPreview.Items.Insert(0, btnImprimirPreview);
             }
