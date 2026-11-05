@@ -378,59 +378,69 @@ namespace CONTROLE_DE_PEDIDOS
         {
             if (!ControleConectado) return;
 
-            await ExecutarControleAsync(async conn =>
+            // O Form1 chama sem await (_ = GarantirTabelasAsync()): uma exceção aqui virava
+            // Task não observada e sumia sem log — ex.: corrida de CREATE ... IF NOT EXISTS
+            // entre várias instâncias subindo juntas (23505 em pg_type), ou falta de permissão.
+            try
             {
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-                    CREATE TABLE IF NOT EXISTS cadastro_rotas (
-                        id SERIAL PRIMARY KEY,
-                        nome VARCHAR(200) NOT NULL UNIQUE
-                    );
-                    CREATE TABLE IF NOT EXISTS orcamentos_ignorados (
-                        orcamento INTEGER PRIMARY KEY,
-                        motivo VARCHAR(300),
-                        data_inclusao TIMESTAMP NOT NULL DEFAULT NOW()
-                    );
-                    CREATE TABLE IF NOT EXISTS pedidos_controlados (
-                        orcamento INTEGER PRIMARY KEY,
-                        cliente VARCHAR(300) NOT NULL DEFAULT '',
-                        nome_fantasia VARCHAR(300) NOT NULL DEFAULT '',
-                        rota VARCHAR(200) NOT NULL DEFAULT '',
-                        aprovado BOOLEAN NOT NULL DEFAULT FALSE,
-                        em_separacao BOOLEAN NOT NULL DEFAULT FALSE,
-                        conferido BOOLEAN NOT NULL DEFAULT FALSE,
-                        liberado BOOLEAN NOT NULL DEFAULT FALSE,
-                        travado BOOLEAN NOT NULL DEFAULT FALSE,
-                        data_aprovacao TIMESTAMP NOT NULL DEFAULT NOW()
-                    );
-                    ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS travado BOOLEAN NOT NULL DEFAULT FALSE;
-                    ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS em_faturamento BOOLEAN NOT NULL DEFAULT FALSE;
-                    CREATE TABLE IF NOT EXISTS historico_exclusoes (
-                        id SERIAL PRIMARY KEY,
-                        orcamento INTEGER NOT NULL,
-                        cliente VARCHAR(300) NOT NULL DEFAULT '',
-                        nome_fantasia VARCHAR(300) NOT NULL DEFAULT '',
-                        rota VARCHAR(200) NOT NULL DEFAULT '',
-                        vendedor VARCHAR(200) NOT NULL DEFAULT '',
-                        pedido_venda INTEGER NOT NULL DEFAULT 0,
-                        nota_fiscal VARCHAR(20) NOT NULL DEFAULT '',
-                        status VARCHAR(40) NOT NULL DEFAULT '',
-                        aprovado BOOLEAN NOT NULL DEFAULT FALSE,
-                        em_separacao BOOLEAN NOT NULL DEFAULT FALSE,
-                        conferido BOOLEAN NOT NULL DEFAULT FALSE,
-                        liberado BOOLEAN NOT NULL DEFAULT FALSE,
-                        travado BOOLEAN NOT NULL DEFAULT FALSE,
-                        em_faturamento BOOLEAN NOT NULL DEFAULT FALSE,
-                        tipo_exclusao VARCHAR(10) NOT NULL DEFAULT '',
-                        usuario_windows VARCHAR(100) NOT NULL DEFAULT '',
-                        data_exclusao TIMESTAMP NOT NULL DEFAULT NOW()
-                    );
-                    CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_data
-                        ON historico_exclusoes (data_exclusao DESC);
-                    CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_orcamento
-                        ON historico_exclusoes (orcamento)";
-                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-            }).ConfigureAwait(false);
+                await ExecutarControleAsync(async conn =>
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        CREATE TABLE IF NOT EXISTS cadastro_rotas (
+                            id SERIAL PRIMARY KEY,
+                            nome VARCHAR(200) NOT NULL UNIQUE
+                        );
+                        CREATE TABLE IF NOT EXISTS orcamentos_ignorados (
+                            orcamento INTEGER PRIMARY KEY,
+                            motivo VARCHAR(300),
+                            data_inclusao TIMESTAMP NOT NULL DEFAULT NOW()
+                        );
+                        CREATE TABLE IF NOT EXISTS pedidos_controlados (
+                            orcamento INTEGER PRIMARY KEY,
+                            cliente VARCHAR(300) NOT NULL DEFAULT '',
+                            nome_fantasia VARCHAR(300) NOT NULL DEFAULT '',
+                            rota VARCHAR(200) NOT NULL DEFAULT '',
+                            aprovado BOOLEAN NOT NULL DEFAULT FALSE,
+                            em_separacao BOOLEAN NOT NULL DEFAULT FALSE,
+                            conferido BOOLEAN NOT NULL DEFAULT FALSE,
+                            liberado BOOLEAN NOT NULL DEFAULT FALSE,
+                            travado BOOLEAN NOT NULL DEFAULT FALSE,
+                            data_aprovacao TIMESTAMP NOT NULL DEFAULT NOW()
+                        );
+                        ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS travado BOOLEAN NOT NULL DEFAULT FALSE;
+                        ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS em_faturamento BOOLEAN NOT NULL DEFAULT FALSE;
+                        CREATE TABLE IF NOT EXISTS historico_exclusoes (
+                            id SERIAL PRIMARY KEY,
+                            orcamento INTEGER NOT NULL,
+                            cliente VARCHAR(300) NOT NULL DEFAULT '',
+                            nome_fantasia VARCHAR(300) NOT NULL DEFAULT '',
+                            rota VARCHAR(200) NOT NULL DEFAULT '',
+                            vendedor VARCHAR(200) NOT NULL DEFAULT '',
+                            pedido_venda INTEGER NOT NULL DEFAULT 0,
+                            nota_fiscal VARCHAR(20) NOT NULL DEFAULT '',
+                            status VARCHAR(40) NOT NULL DEFAULT '',
+                            aprovado BOOLEAN NOT NULL DEFAULT FALSE,
+                            em_separacao BOOLEAN NOT NULL DEFAULT FALSE,
+                            conferido BOOLEAN NOT NULL DEFAULT FALSE,
+                            liberado BOOLEAN NOT NULL DEFAULT FALSE,
+                            travado BOOLEAN NOT NULL DEFAULT FALSE,
+                            em_faturamento BOOLEAN NOT NULL DEFAULT FALSE,
+                            tipo_exclusao VARCHAR(10) NOT NULL DEFAULT '',
+                            usuario_windows VARCHAR(100) NOT NULL DEFAULT '',
+                            data_exclusao TIMESTAMP NOT NULL DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_data
+                            ON historico_exclusoes (data_exclusao DESC);
+                        CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_orcamento
+                            ON historico_exclusoes (orcamento)";
+                    await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao garantir as tabelas do banco de controle", ex);
+            }
         }
 
         // =====================================================================
