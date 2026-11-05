@@ -328,6 +328,7 @@ namespace CONTROLE_DE_PEDIDOS
                 var dados = lista ?? [];
 
                 // Buscar pedido_venda + vendedor do integra para cada pedido
+                bool enriquecido = false;
                 if (dados.Count > 0 && _db.IntegraConectado)
                 {
                     try
@@ -372,11 +373,29 @@ namespace CONTROLE_DE_PEDIDOS
                                     p.ConferidoIntegra = info.conferidoIntegra;
                                 }
                             }
+                            enriquecido = true;
                         }
                     }
                     catch (Exception ex)
                     {
                         Logger.Warn("Erro ao buscar pedido_venda/vendedor", ex);
+                    }
+                }
+
+                // Integra fora/falhou: manter o último enriquecimento conhecido. Sem isso o
+                // CopiarDe zerava PedidoVenda/Vendedor/ConferidoIntegra — faturados viravam
+                // "NÃO", o filtro por vendedor esvaziava o grid, e com ConferidoIntegra
+                // falso o Avançar gravava conferência MANUAL num pedido que o Integra já
+                // conferiu.
+                if (!enriquecido && dados.Count > 0 && _pedidosTodos.Count > 0)
+                {
+                    var anteriores = _pedidosTodos.ToDictionary(p => p.Orcamento);
+                    foreach (var p in dados)
+                    {
+                        if (!anteriores.TryGetValue(p.Orcamento, out var ant)) continue;
+                        p.PedidoVenda = ant.PedidoVenda;
+                        p.Vendedor = ant.Vendedor;
+                        p.ConferidoIntegra = ant.ConferidoIntegra;
                     }
                 }
 
@@ -446,25 +465,58 @@ namespace CONTROLE_DE_PEDIDOS
             _pedidosTodos = resultado;
         }
 
+        // Pedidos de recarga que chegaram com outra recarga em andamento. Antes eram
+        // descartados em silêncio: um refresh já em voo podia ter lido o banco ANTES da
+        // mudança que motivou o novo pedido (notificação, restauração de ignorado,
+        // conflito "a tela será atualizada"...), e a tela ficava velha até o próximo timer.
+        private bool _recarregarOrcamentosPendente;
+        private bool _recarregarPedidosPendente;
+
         private async Task RecarregarDadosAsync(bool recarregarOrcamentos = true, bool recarregarPedidos = true)
         {
-            if (_recarregando) return;
+            if (_recarregando)
+            {
+                _recarregarOrcamentosPendente |= recarregarOrcamentos;
+                _recarregarPedidosPendente |= recarregarPedidos;
+                return;
+            }
             _recarregando = true;
-            
-            // TODO: Considerar desabilitar botões ou mostrar um indicador de loading
 
             try
             {
-                var tasks = new List<Task>();
-                if (recarregarOrcamentos) tasks.Add(CarregarOrcamentosAsync());
-                if (recarregarPedidos) tasks.Add(CarregarPedidosAsync());
+                while (recarregarOrcamentos || recarregarPedidos)
+                {
+                    var tasks = new List<Task>();
+                    if (recarregarOrcamentos) tasks.Add(CarregarOrcamentosAsync());
+                    if (recarregarPedidos) tasks.Add(CarregarPedidosAsync());
 
-                await Task.WhenAll(tasks);
+                    await Task.WhenAll(tasks);
+
+                    // Pedidos enfileirados durante esta passada: mais uma rodada.
+                    recarregarOrcamentos = _recarregarOrcamentosPendente;
+                    recarregarPedidos = _recarregarPedidosPendente;
+                    _recarregarOrcamentosPendente = false;
+                    _recarregarPedidosPendente = false;
+                }
             }
             finally
             {
                 _recarregando = false;
             }
+        }
+
+        /// <summary>
+        /// Chamar logo após uma escrita local bem-sucedida (o próprio app atualiza os
+        /// objetos em memória). Se havia recarga em voo, ela pode ter lido o banco antes
+        /// da escrita e sobrescreveria o estado novo com o antigo — como a notificação da
+        /// própria instância é descartada, ninguém corrigiria até o próximo timer.
+        /// Enfileira mais uma passada para depois dela.
+        /// </summary>
+        private void InvalidarRecargaEmAndamento()
+        {
+            if (!_recarregando) return;
+            _recarregarOrcamentosPendente = true;
+            _recarregarPedidosPendente = true;
         }
 
         /// <summary>
@@ -538,8 +590,33 @@ namespace CONTROLE_DE_PEDIDOS
             await RecarregarDadosAsync();
         }
 
+        // ==================================================================
+        // EXCLUSÃO MÚTUA DAS AÇÕES DOS BOTÕES
+        // Os handlers são async: um duplo clique (ou clique em outro botão) durante o
+        // await da primeira ação rodava a segunda com o MESMO estado em memória, ainda
+        // não atualizado — o UPDATE com locking otimista não batia e o operador via um
+        // falso "alterado por outro usuário" (ou dois previews de impressão empilhados).
+        // ==================================================================
+        private bool _acaoEmAndamento;
+
+        private sealed class AcaoEmAndamento(Form1 form) : IDisposable
+        {
+            public void Dispose() => form._acaoEmAndamento = false;
+        }
+
+        /// <summary>null = já há uma ação rodando (o clique é ignorado).</summary>
+        private AcaoEmAndamento? TentarIniciarAcao()
+        {
+            if (_acaoEmAndamento) return null;
+            _acaoEmAndamento = true;
+            return new AcaoEmAndamento(this);
+        }
+
         private async void BtnAprovar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvOrcamentos.CurrentRow?.DataBoundItem is not OrcamentoResumo orc) return;
             if (!_db.ControleConectado) return;
 
@@ -572,24 +649,25 @@ namespace CONTROLE_DE_PEDIDOS
                 if (linhas > 0)
                 {
                     // Atualiza o estado local e as grids manualmente para evitar um refresh completo
+                    InvalidarRecargaEmAndamento();
                     _aprovados.Add(orc.Orcamento);
 
-                    // Remove do grid de orçamentos
-                    if (dgvOrcamentos.DataSource is SortableBindingList<OrcamentoResumo> listaOrcamentos)
-                    {
-                        listaOrcamentos.Remove(orc);
-                        lblContagem.Text = $"{listaOrcamentos.Count} registro{(listaOrcamentos.Count != 1 ? "s" : "")}";
-                    }
+                    RemoverOrcamentoDoGrid(orc.Orcamento);
 
-                    // Adiciona na master list (Vendedor será preenchido no próximo refresh)
-                    var novoPedido = new PedidoControlado
+                    // Adiciona na master list (Vendedor será preenchido no próximo refresh).
+                    // Um refresh concluído durante o await pode já tê-lo trazido do banco:
+                    // inserir de novo duplicaria a chave e o ToDictionary do rebind lançaria.
+                    if (!_pedidosTodos.Any(p => p.Orcamento == orc.Orcamento))
                     {
-                        Orcamento = orc.Orcamento,
-                        Cliente = orc.Nome,
-                        NomeFantasia = orc.NomeFantasia,
-                        Rota = dialog.RotaSelecionada
-                    };
-                    _pedidosTodos.Insert(0, novoPedido);
+                        var novoPedido = new PedidoControlado
+                        {
+                            Orcamento = orc.Orcamento,
+                            Cliente = orc.Nome,
+                            NomeFantasia = orc.NomeFantasia,
+                            Rota = dialog.RotaSelecionada
+                        };
+                        _pedidosTodos.Insert(0, novoPedido);
+                    }
                     AtualizarOpcoesDropdowns();
                     AplicarFiltros();
                 }
@@ -607,8 +685,29 @@ namespace CONTROLE_DE_PEDIDOS
             }
         }
 
+        /// <summary>
+        /// Remove o orçamento do grid de pendentes pela CHAVE. O objeto capturado no
+        /// clique pode não estar mais na lista: um refresh durante o diálogo/MessageBox
+        /// troca o DataSource por objetos novos, e Remove(objeto) por referência virava
+        /// no-op — a linha controlada/ignorada continuava visível até o próximo timer.
+        /// </summary>
+        private void RemoverOrcamentoDoGrid(int orcamento)
+        {
+            if (dgvOrcamentos.DataSource is not SortableBindingList<OrcamentoResumo> lista) return;
+
+            for (int i = lista.Count - 1; i >= 0; i--)
+            {
+                if (lista[i].Orcamento == orcamento)
+                    lista.RemoveAt(i);
+            }
+            lblContagem.Text = $"{lista.Count} registro{(lista.Count != 1 ? "s" : "")}";
+        }
+
         private async void BtnIgnorar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvOrcamentos.CurrentRow?.DataBoundItem is not OrcamentoResumo orc) return;
             if (!_db.ControleConectado) return;
 
@@ -635,12 +734,9 @@ namespace CONTROLE_DE_PEDIDOS
                 _db.NotificarMudanca("ignorados");   // some da lista de pendentes dos outros
 
                 // Atualiza o estado local e a grid manualmente
+                InvalidarRecargaEmAndamento();
                 _ignorados.Add(orc.Orcamento);
-                if (dgvOrcamentos.DataSource is SortableBindingList<OrcamentoResumo> listaOrcamentos)
-                {
-                    listaOrcamentos.Remove(orc);
-                    lblContagem.Text = $"{listaOrcamentos.Count} registro{(listaOrcamentos.Count != 1 ? "s" : "")}";
-                }
+                RemoverOrcamentoDoGrid(orc.Orcamento);
             }
             catch (Exception ex)
             {
@@ -665,26 +761,57 @@ namespace CONTROLE_DE_PEDIDOS
             }
         }
 
+        /// <summary>
+        /// DDL idempotente. Aguardado ANTES da primeira carga: disparado em paralelo, num
+        /// banco de controle recém-criado a carga corria contra o CREATE TABLE, falhava
+        /// ("relation does not exist") e os grids ficavam vazios até o próximo timer.
+        /// </summary>
+        private async Task GarantirTabelasSeguroAsync()
+        {
+            try
+            {
+                await _db.GarantirTabelasAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao garantir tabelas do banco de controle", ex);
+            }
+        }
+
         private async void Db_StatusAlterado(object? sender, StatusConexaoEventArgs e)
         {
+            if (IsDisposed) return;
             if (this.InvokeRequired)
             {
                 this.BeginInvoke(() => Db_StatusAlterado(sender, e));
                 return;
             }
-            
+
+            try
+            {
+                await AplicarStatusConexaoAsync(e);
+            }
+            catch (Exception ex)
+            {
+                // async void: exceção aqui derrubaria o app pelo handler global
+                Logger.Error("Erro ao processar mudança de status da conexão", ex);
+            }
+        }
+
+        private async Task AplicarStatusConexaoAsync(StatusConexaoEventArgs e)
+        {
             if (e.StatusIntegra == StatusConexao.Conectado && e.StatusControle == StatusConexao.Conectado && !_dadosIniciaisCarregados)
             {
                 _dadosIniciaisCarregados = true;
-                _ = _db.GarantirTabelasAsync();
+                await GarantirTabelasSeguroAsync();
                 await RecarregarDadosAsync();
                 AgendarProximoRefresh();
                 _db.IniciarEscutaMudancas();   // ações de outros operadores chegam em ~1s
             }
             else if (e.StatusControle == StatusConexao.Conectado && _dadosIniciaisCarregados)
             {
-                _ = _db.GarantirTabelasAsync();
-                await CarregarPedidosAsync();
+                await GarantirTabelasSeguroAsync();
+                await RecarregarDadosAsync(recarregarOrcamentos: false);
             }
 
             if (e.StatusIntegra == StatusConexao.Desconectado)
@@ -725,6 +852,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnAlterarRota_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -753,6 +883,7 @@ namespace CONTROLE_DE_PEDIDOS
                 if (linhas > 0)
                 {
                     // Atualiza o objeto na lista e notifica a grid
+                    InvalidarRecargaEmAndamento();
                     pedido.Rota = dialog.RotaSelecionada;
                     AplicarFiltros();
                 }
@@ -760,7 +891,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido foi alterado ou excluído por outro usuário.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -772,6 +903,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnExcluirPedido_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -812,10 +946,11 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     _pedidosTodos.RemoveAll(p => p.Orcamento == pedido.Orcamento);
                     AtualizarOpcoesDropdowns();
                     AplicarFiltros();
-                    await CarregarOrcamentosAsync();
+                    await RecarregarDadosAsync(recarregarPedidos: false);
                 }
                 else
                 {
@@ -833,6 +968,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnTravar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -862,6 +1000,7 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     pedido.Travado = true;
                     AplicarFiltros();
                 }
@@ -869,7 +1008,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido já foi travado ou excluído por outro usuário.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -881,6 +1020,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnDestravar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -910,6 +1052,7 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     pedido.Travado = false;
                     AplicarFiltros();
                 }
@@ -917,7 +1060,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido já foi destravado ou excluído por outro usuário.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -929,6 +1072,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnAvancarStatus_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -970,7 +1116,8 @@ namespace CONTROLE_DE_PEDIDOS
         /// (WHERE com todas as flags atuais). Retorna true se avançou; em conflito
         /// (0 linhas), avisa e recarrega o grid.
         /// </summary>
-        private async Task<bool> ExecutarAvancoStatusAsync(PedidoControlado pedido, string coluna)
+        private async Task<bool> ExecutarAvancoStatusAsync(PedidoControlado pedido, string coluna,
+            Func<IWin32Window>? ownerConflito = null)
         {
             var linhas = await _db.ExecutarControleComLinhasAsync(async conn =>
             {
@@ -997,18 +1144,22 @@ namespace CONTROLE_DE_PEDIDOS
                     case "conferido": pedido.Conferido = true; break;
                     case "liberado": pedido.Liberado = true; break;
                 }
+                InvalidarRecargaEmAndamento();
                 AplicarFiltros();
                 return true;
             }
 
-            MessageBox.Show(this, "O status deste pedido foi alterado por outro usuário.\nA tela será atualizada.",
+            MessageBox.Show(ownerConflito?.Invoke() ?? this, "O status deste pedido foi alterado por outro usuário.\nA tela será atualizada.",
                 "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            await CarregarPedidosAsync();
+            await RecarregarDadosAsync(recarregarOrcamentos: false);
             return false;
         }
 
         private async void BtnRetornarStatus_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -1072,13 +1223,14 @@ namespace CONTROLE_DE_PEDIDOS
                         case "em_separacao": pedido.EmSeparacao = false; break;
                         case "aprovado": pedido.Aprovado = false; break;
                     }
+                    InvalidarRecargaEmAndamento();
                     AplicarFiltros();
                 }
                 else
                 {
                     MessageBox.Show(this, "O status deste pedido foi alterado por outro usuário.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -1090,6 +1242,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnAssumir_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -1129,6 +1284,7 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     pedido.EmFaturamento = true;
                     AplicarFiltros();
                 }
@@ -1136,7 +1292,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido já foi assumido por outro operador.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -1148,6 +1304,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnLargar_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             if (!_db.ControleConectado) return;
 
@@ -1170,6 +1329,7 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (linhas > 0)
                 {
+                    InvalidarRecargaEmAndamento();
                     pedido.EmFaturamento = false;
                     AplicarFiltros();
                 }
@@ -1177,7 +1337,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, "Este pedido já foi largado por outro operador.\nA tela será atualizada.",
                         "Conflito de Concorrência", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    await CarregarPedidosAsync();
+                    await RecarregarDadosAsync(recarregarOrcamentos: false);
                 }
             }
             catch (Exception ex)
@@ -1211,6 +1371,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnImprimirSeparacao_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             await ImprimirSeparacaoAsync(pedido.Orcamento, pedido, this);
         }
@@ -1401,7 +1564,12 @@ namespace CONTROLE_DE_PEDIDOS
             try
             {
                 if (!_db.ControleConectado) return;
-                await ExecutarAvancoStatusAsync(pedido, "em_separacao");
+                // ImpressaoRealConcluida dispara com o preview (modal) ainda aberto: o aviso
+                // de conflito precisa dele como owner, não do Form1 (invariante 5 — senão
+                // nasce mal-parentado). Resolvido só na hora de exibir, depois do await:
+                // se o preview já fechou, a janela ativa volta a ser o próprio Form1.
+                await ExecutarAvancoStatusAsync(pedido, "em_separacao",
+                    () => Form.ActiveForm is { IsDisposed: false } ativa ? ativa : this);
             }
             catch (Exception ex)
             {
@@ -1424,6 +1592,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnCopiaPedido_Click(object? sender, EventArgs e)
         {
+            using var acao = TentarIniciarAcao();
+            if (acao == null) return;
+
             if (dgvPedidos.CurrentRow?.DataBoundItem is not PedidoControlado pedido) return;
             await ImprimirCopiaPedidoAsync(pedido.Orcamento, this);
         }
@@ -1812,13 +1983,32 @@ namespace CONTROLE_DE_PEDIDOS
             dialog.ShowDialog(this);
         }
 
-        private void BtnConfig_Click(object? sender, EventArgs e)
+        private async void BtnConfig_Click(object? sender, EventArgs e)
         {
             using var dialog = new ConfigDialog(_db.Config);
-            if (dialog.ShowDialog(this) == DialogResult.OK)
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+            _db.AtualizarConfig(dialog.Config);
+
+            // Antes: _dadosIniciaisCarregados = false, esperando a "próxima verificação de
+            // conexão" recarregar. Mas StatusAlterado só dispara quando o status MUDA —
+            // salvando com a conexão ok nada disparava, e com a flag em false o
+            // AgendarProximoRefresh deixava de religar o timer e as notificações eram
+            // descartadas: o auto-refresh morria até reabrir o app (e a filial/orçamento
+            // mínimo novos não eram aplicados). Se o status mudar, Db_StatusAlterado cuida.
+            if (!_dadosIniciaisCarregados) return;
+
+            try
             {
-                _db.AtualizarConfig(dialog.Config);
-                _dadosIniciaisCarregados = false; // Força recarregamento na próxima verificação de conexão
+                _assinaturaOrcamentos = "";
+                _assinaturaPedidos = "";
+                LimparDetalhes();
+                await RecarregarDadosAsync();
+                if (_db.IntegraConectado) AgendarProximoRefresh();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao recarregar após salvar a configuração", ex);
             }
         }
 
@@ -1826,6 +2016,12 @@ namespace CONTROLE_DE_PEDIDOS
         {
             // SystemEvents é estático: sem desanexar, o form vaza
             Microsoft.Win32.SystemEvents.SessionSwitch -= SessionSwitchHandler;
+            // O DatabaseService é singleton e sobrevive ao form: sem desanexar, um evento
+            // de status/notificação posterior entraria num form já destruído.
+            _db.StatusAlterado -= Db_StatusAlterado;
+            _db.MudancaNotificada -= Db_MudancaNotificada;
+            timerAutoRefresh.Stop();
+            timerCoalescer.Stop();
             _db.Dispose();
             base.OnFormClosed(e);
         }
