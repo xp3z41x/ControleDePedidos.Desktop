@@ -33,17 +33,41 @@ namespace CONTROLE_DE_PEDIDOS
 
         // SOMENTE LEITURA - opcoes forcam read-only no nivel da sessao PostgreSQL
         public string ConnectionStringIntegra =>
-            $"Host={ServidorIP};Port={Porta};Database={BancoIntegra};Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer;Options=-c default_transaction_read_only=on";
+            MontarConnectionString(BancoIntegra, somenteLeitura: true);
 
         // ESCRITA EXCEPCIONAL - usar apenas no fluxo "Corrigir Observação".
         public string ConnectionStringIntegraEscrita =>
-            $"Host={ServidorIP};Port={Porta};Database={BancoIntegra};Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer";
+            MontarConnectionString(BancoIntegra, somenteLeitura: false);
 
         public string ConnectionStringControle =>
-            $"Host={ServidorIP};Port={Porta};Database={BancoControle};Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer";
+            MontarConnectionString(BancoControle, somenteLeitura: false);
 
         public string ConnectionStringServidor =>
-            $"Host={ServidorIP};Port={Porta};Database=postgres;Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer";
+            MontarConnectionString("postgres", somenteLeitura: false);
+
+        /// <summary>
+        /// Monta a connection string pelo builder do Npgsql, que escapa cada valor.
+        /// Interpolar direto quebrava com ';' / '=' / aspas na senha (ou no usuário): o
+        /// trecho após o ';' virava OUTRO parâmetro — inclusive podendo sobrescrever
+        /// o Options do read-only do Integra. Nunca lança: porta inválida (só possível
+        /// editando o INI à mão; o ConfigDialog valida) cai no padrão 5432.
+        /// </summary>
+        private string MontarConnectionString(string database, bool somenteLeitura)
+        {
+            var csb = new Npgsql.NpgsqlConnectionStringBuilder
+            {
+                Host = ServidorIP,
+                Port = int.TryParse(Porta, out var porta) && porta is >= 1 and <= 65535 ? porta : 5432,
+                Database = database,
+                Username = Usuario,
+                Password = Senha,
+                Timeout = 5,
+                SslMode = Npgsql.SslMode.Prefer
+            };
+            if (somenteLeitura)
+                csb.Options = "-c default_transaction_read_only=on";
+            return csb.ConnectionString;
+        }
 
         public void Salvar()
         {
