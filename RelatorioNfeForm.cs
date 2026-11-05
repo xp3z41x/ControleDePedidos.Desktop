@@ -212,6 +212,9 @@ namespace CONTROLE_DE_PEDIDOS
             {
                 Name = "colSelecionar",
                 HeaderText = "",
+                // Bindada ao item: coluna não-bindada perde as marcações quando o grid é
+                // reordenado (clique no cabeçalho -> ResetBindings recria as linhas).
+                DataPropertyName = nameof(PedidoNfe.Selecionado),
                 Width = 40,
                 MinimumWidth = 40,
                 ReadOnly = false,
@@ -254,8 +257,6 @@ namespace CONTROLE_DE_PEDIDOS
         {
             try
             {
-                var config = _db.Config;
-
                 var lista = await _db.ExecutarControleAsync(async conn =>
                 {
                     var result = new List<PedidoNfe>();
@@ -280,49 +281,22 @@ namespace CONTROLE_DE_PEDIDOS
 
                 var dados = lista ?? [];
 
-                // Buscar NF-e do integra via estmov
-                if (dados.Count > 0 && _db.IntegraConectado && config.FilialFiscal > 0)
+                // Buscar NF-e do integra via estmov — mesma rotina do histórico de
+                // exclusões (best-effort, nunca lança). A cópia local anterior lia com
+                // GetString/GetInt32 e casava a chave sem Trim: observacao com padding
+                // (char(n)) ou nota_fiscal de outro tipo que não int4 zeravam a coluna
+                // Nº NF-e inteira (exceção engolida no Warn).
+                if (dados.Count > 0)
                 {
-                    try
+                    var nfes = await _db.BuscarNotasFiscaisAsync(dados.Select(p => p.Orcamento));
+                    foreach (var p in dados)
                     {
-                        var nfeData = await _db.ConsultarIntegraAsync(async conn =>
-                        {
-                            var dict = new Dictionary<string, string>();
-                            using var cmd = conn.CreateCommand();
-                            var paramList = string.Join(",", dados.Select((_, i) => $"@p{i}"));
-                            cmd.CommandText = $@"
-                                SELECT observacao, nota_fiscal
-                                FROM estmov
-                                WHERE filial = @filialFiscal
-                                  AND observacao IN ({paramList})";
-                            cmd.Parameters.AddWithValue("filialFiscal", config.FilialFiscal);
-                            for (int i = 0; i < dados.Count; i++)
-                                cmd.Parameters.AddWithValue($"p{i}", dados[i].Orcamento.ToString());
-                            using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
-                            while (await reader.ReadAsync().ConfigureAwait(false))
-                            {
-                                var obs = await reader.IsDBNullAsync(0) ? "" : reader.GetString(0);
-                                var nf = await reader.IsDBNullAsync(1) ? "" : reader.GetInt32(1).ToString();
-                                if (!string.IsNullOrEmpty(obs))
-                                    dict[obs] = nf;
-                            }
-                            return dict;
-                        });
-
-                        if (nfeData != null)
-                        {
-                            foreach (var p in dados)
-                            {
-                                if (nfeData.TryGetValue(p.Orcamento.ToString(), out var nf))
-                                    p.NumeroNfe = nf;
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Warn("Erro ao buscar NF-e do integra", ex);
+                        if (nfes.TryGetValue(p.Orcamento, out var nf))
+                            p.NumeroNfe = nf;
                     }
                 }
+
+                if (IsDisposed) return; // janela fechada durante a carga
 
                 dgvPedidos.DataSource = new SortableBindingList<PedidoNfe>(dados);
                 lblContagem.Text = $"{dados.Count} pedido{(dados.Count != 1 ? "s" : "")}";
@@ -330,6 +304,8 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
+                Logger.Error("Erro ao carregar pedidos (Relatório de NF-e)", ex);
+                if (IsDisposed) return; // janela fechada durante a carga
                 MessageBox.Show(this, $"Erro ao carregar pedidos: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -362,10 +338,14 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
+                if (IsDisposed) return;
                 MessageBox.Show(this, $"Erro ao carregar rotas: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+            // async void: se a janela fechou durante a consulta, ShowDialog(this) num
+            // owner descartado lançaria exceção não tratada e derrubaria o app.
+            if (IsDisposed) return;
 
             if (rotas == null || rotas.Count == 0)
             {
@@ -518,7 +498,8 @@ namespace CONTROLE_DE_PEDIDOS
             selecionados.Sort((a, b) =>
                 string.Compare(a.Cliente, b.Cliente, StringComparison.OrdinalIgnoreCase));
 
-            var doc = new RelatorioNfePrintDoc(selecionados);
+            // using: PrintDocument é IDisposable — cada Visualizar vazava um.
+            using var doc = new RelatorioNfePrintDoc(selecionados);
             PrintingHelper.LogarEstado(doc, "Visualizar Relatório de NF-e");
             using var preview = new PrintPreviewDialog
             {
@@ -536,5 +517,8 @@ namespace CONTROLE_DE_PEDIDOS
         public string NomeFantasia { get; set; } = "";
         public string Rota { get; set; } = "";
         public string NumeroNfe { get; set; } = "";
+
+        /// <summary>Marcação do checkbox do grid (estado de UI, não vem do banco).</summary>
+        public bool Selecionado { get; set; }
     }
 }

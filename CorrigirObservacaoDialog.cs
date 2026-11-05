@@ -8,6 +8,7 @@ namespace CONTROLE_DE_PEDIDOS
         private TextBox txtObservacao = null!;
         private Button btnGravar = null!;
         private Button btnCancelar = null!;
+        private bool _gravando;
 
         public CorrigirObservacaoDialog()
         {
@@ -142,14 +143,21 @@ namespace CONTROLE_DE_PEDIDOS
                 return;
             }
 
-            var observacao = txtObservacao.Text.Trim();
-            if (string.IsNullOrEmpty(observacao))
+            // A observação é o nº do orçamento (convenção fiscal usada na correlação de
+            // NF-e: estmov.observacao IN ('123', ...)). Grava SEMPRE a forma canônica do
+            // número: "000123" passaria no filtro de dígitos mas nunca casaria no IN, e
+            // "0" não é orçamento — ambos deixavam a NF-e do pedido invisível.
+            var textoObs = txtObservacao.Text.Trim();
+            if (!int.TryParse(textoObs, out int orcamentoObs) || orcamentoObs <= 0)
             {
-                MessageBox.Show(this, "Informe a nova observação.",
+                MessageBox.Show(this, string.IsNullOrEmpty(textoObs)
+                        ? "Informe a nova observação."
+                        : "Observação inválida: informe um número de orçamento maior que zero.",
                     "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 txtObservacao.Focus();
                 return;
             }
+            var observacao = orcamentoObs.ToString();
 
             var confirmar = MessageBox.Show(this,
                 $"Gravar observação '{observacao}' no pedido {pedido} da filial fiscal {_db.Config.FilialFiscal}?\n\nEsta ação sobrescreve qualquer valor atual de observação.",
@@ -158,6 +166,7 @@ namespace CONTROLE_DE_PEDIDOS
 
             btnGravar.Enabled = false;
             btnCancelar.Enabled = false;
+            _gravando = true;
             try
             {
                 int linhas = await _db.AtualizarObservacaoEstmovAsync(pedido, observacao);
@@ -165,6 +174,7 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     MessageBox.Show(this, $"{linhas} registro(s) atualizado(s).",
                         "Sucesso", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    _gravando = false; // libera o OnFormClosing para o Close() abaixo
                     DialogResult = DialogResult.OK;
                     Close();
                 }
@@ -182,9 +192,21 @@ namespace CONTROLE_DE_PEDIDOS
             }
             finally
             {
+                _gravando = false;
                 btnGravar.Enabled = true;
                 btnCancelar.Enabled = true;
             }
+        }
+
+        // Durante o UPDATE no Integra o "X"/Alt+F4 ficaria ativo (só os botões são
+        // desabilitados): fechar ali descartava o dialog e o MessageBox(this) do
+        // resultado estourava ObjectDisposedException num async void — e o operador
+        // ficava sem saber se a gravação aconteceu.
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_gravando && e.CloseReason == CloseReason.UserClosing)
+                e.Cancel = true;
+            base.OnFormClosing(e);
         }
     }
 }

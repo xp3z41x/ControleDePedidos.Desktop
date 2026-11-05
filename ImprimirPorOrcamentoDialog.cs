@@ -27,6 +27,9 @@ namespace CONTROLE_DE_PEDIDOS
         /// (nunca re-parse do campo). Zero = nada encontrado/invalidação.</summary>
         private int _orcamentoEncontrado;
 
+        /// <summary>Busca/impressão em andamento: o X/Alt+F4 fica bloqueado (ver OnFormClosing).</summary>
+        private bool _ocupado;
+
         public ImprimirPorOrcamentoDialog(
             Func<int, PedidoControlado?> localizarControlado,
             Func<int, Form, Task> imprimirSeparacao,
@@ -179,6 +182,7 @@ namespace CONTROLE_DE_PEDIDOS
 
         private void HabilitarControles(bool habilitar)
         {
+            _ocupado = !habilitar;
             // ReadOnly (não Enabled) para o campo não perder o foco durante o async.
             txtOrcamento.ReadOnly = !habilitar;
             btnBuscar.Enabled = habilitar;
@@ -301,6 +305,14 @@ namespace CONTROLE_DE_PEDIDOS
                 // Erros já são tratados e exibidos dentro do método do Form1.
                 await imprimir(orcamento, this);
             }
+            catch (Exception ex)
+            {
+                // Rede de segurança: o handler é async void — exceção escapando daqui
+                // derrubaria o app inteiro.
+                Logger.Error($"Erro ao imprimir orçamento {orcamento} pela mini-janela", ex);
+                MessageBox.Show(this, $"Erro ao imprimir: {ex.Message}", "Erro",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
             finally
             {
                 HabilitarControles(true);
@@ -311,6 +323,16 @@ namespace CONTROLE_DE_PEDIDOS
                 txtOrcamento.Focus();
                 txtOrcamento.SelectAll();
             }
+        }
+
+        // btnFechar fica desabilitado durante busca/impressão, mas o X/Alt+F4 não:
+        // fechar ali descartava esta janela, que é o owner do preview/MessageBox que o
+        // Form1 abre em seguida (ObjectDisposedException / diálogo mal-parentado).
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_ocupado && e.CloseReason == CloseReason.UserClosing)
+                e.Cancel = true;
+            base.OnFormClosing(e);
         }
     }
 }

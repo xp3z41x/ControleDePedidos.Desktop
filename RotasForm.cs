@@ -11,6 +11,7 @@ namespace CONTROLE_DE_PEDIDOS
         private Button btnExcluir = null!;
         private Label lblContagem = null!;
         private SortableBindingList<RotaItem> _rotas = [];
+        private bool _ocupado;
 
         public RotasForm()
         {
@@ -216,6 +217,7 @@ namespace CONTROLE_DE_PEDIDOS
                     }
                     return result;
                 });
+                if (IsDisposed) return; // janela fechada durante a carga
 
                 _rotas = new SortableBindingList<RotaItem>(lista ?? []);
                 dgvRotas.DataSource = _rotas;
@@ -229,17 +231,22 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void AdicionarRota()
         {
+            // Enter (com auto-repeat) e clique disparam este async void; sem a trava o
+            // segundo disparo durante o await gerava INSERT duplicado -> falso "Já existe".
+            if (_ocupado) return;
             var nome = txtNovaRota.Text.Trim();
             if (string.IsNullOrEmpty(nome)) return;
 
+            DefinirOcupado(true);
             try
             {
-                await _db.ExecutarControleAsync(async conn =>
+                // ComLinhas: notifica as outras instâncias (invariante "escreveu, notifique").
+                await _db.ExecutarControleComLinhasAsync(async conn =>
                 {
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText = "INSERT INTO cadastro_rotas (nome) VALUES (@nome)";
                     cmd.Parameters.AddWithValue("nome", nome);
-                    await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    return await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                 });
 
                 txtNovaRota.Clear();
@@ -256,10 +263,15 @@ namespace CONTROLE_DE_PEDIDOS
                 MessageBox.Show(this, $"Erro ao adicionar rota: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally
+            {
+                DefinirOcupado(false);
+            }
         }
 
         private async void ExcluirRota()
         {
+            if (_ocupado) return;
             if (dgvRotas.CurrentRow?.DataBoundItem is not RotaItem rota) return;
             var confirm = MessageBox.Show(this,
                 $"Excluir a rota \"{rota.Nome}\"?", "Confirmar Exclusão",
@@ -267,6 +279,7 @@ namespace CONTROLE_DE_PEDIDOS
 
             if (confirm != DialogResult.Yes) return;
 
+            DefinirOcupado(true);
             try
             {
                 var linhas = await _db.ExecutarControleComLinhasAsync(async conn =>
@@ -290,6 +303,26 @@ namespace CONTROLE_DE_PEDIDOS
                 MessageBox.Show(this, $"Erro ao excluir rota: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally
+            {
+                DefinirOcupado(false);
+            }
+        }
+
+        private void DefinirOcupado(bool ocupado)
+        {
+            _ocupado = ocupado;
+            btnAdicionar.Enabled = !ocupado;
+            btnExcluir.Enabled = !ocupado;
+        }
+
+        // Fechar (X/Esc/Alt+F4) no meio de um INSERT/DELETE descartava o form e o
+        // MessageBox(this) seguinte lançava ObjectDisposedException em async void.
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_ocupado && e.CloseReason == CloseReason.UserClosing)
+                e.Cancel = true;
+            base.OnFormClosing(e);
         }
 
         private void AtualizarContagem()

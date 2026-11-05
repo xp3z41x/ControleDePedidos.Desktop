@@ -19,6 +19,7 @@ namespace CONTROLE_DE_PEDIDOS
 
         // Lista bindada ao grid (filtrada, com sort preservado)
         private SortableBindingList<HistoricoExclusaoItem> _bind = [];
+        private bool _ocupado;
 
         public HistoricoExclusoesForm()
         {
@@ -302,6 +303,7 @@ namespace CONTROLE_DE_PEDIDOS
             try
             {
                 var lista = await _db.ListarHistoricoExclusoesAsync();
+                if (IsDisposed) return; // janela fechada durante a carga
                 _itens = lista;
                 // Copia independente para o bind: BindingList<T>(IList<T>) wrapea a MESMA
                 // referencia passada. Sem o ToList(), AtualizarInPlace removeria itens de
@@ -314,6 +316,11 @@ namespace CONTROLE_DE_PEDIDOS
                 {
                     dgvHistorico.DataSource = _bind;
                     DataGridViewSortHelper.RestoreSort(dgvHistorico, sortCol, sortDir);
+                    // Termo digitado antes do fim da carga (ou mantido após "Excluir
+                    // histórico antigo") era ignorado: o grid mostrava TUDO com o campo
+                    // de busca preenchido.
+                    if (!string.IsNullOrWhiteSpace(txtPesquisa.Text))
+                        AplicarFiltros();
                     AtualizarContagem();
                 }
                 finally
@@ -325,6 +332,7 @@ namespace CONTROLE_DE_PEDIDOS
             catch (Exception ex)
             {
                 Logger.Error("Erro ao carregar histórico de exclusões", ex);
+                if (IsDisposed) return;
                 MessageBox.Show(this, $"Erro ao carregar histórico: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -364,6 +372,7 @@ namespace CONTROLE_DE_PEDIDOS
 
             if (confirm != DialogResult.Yes) return;
 
+            _ocupado = true;
             try
             {
                 btnLimparAntigos.Enabled = false;
@@ -385,8 +394,18 @@ namespace CONTROLE_DE_PEDIDOS
             }
             finally
             {
+                _ocupado = false;
                 btnLimparAntigos.Enabled = true;
             }
+        }
+
+        // Fechar durante a limpeza descartava o form e o MessageBox(this) do resultado
+        // lançava ObjectDisposedException em async void.
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_ocupado && e.CloseReason == CloseReason.UserClosing)
+                e.Cancel = true;
+            base.OnFormClosing(e);
         }
 
         private void AtualizarContagem()
