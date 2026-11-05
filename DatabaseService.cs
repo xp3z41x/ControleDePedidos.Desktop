@@ -59,6 +59,10 @@ namespace CONTROLE_DE_PEDIDOS
         private readonly SynchronizationContext? _syncContext;
         private int _verificando;
         private bool _bancoControleGarantido;
+        /// <summary>1 = a próxima verificação publica StatusAlterado mesmo sem mudança
+        /// (após trocar a config o Form1 zera o estado e só recarrega ao receber o evento).</summary>
+        private int _forcarNotificacaoStatus;
+        private int _falhasGarantirBanco;
 
         // --- LISTEN/NOTIFY: avisa as outras instâncias quando alguém grava algo ---
         private const string CanalMudancas = "cp_mudou";
@@ -149,8 +153,33 @@ namespace CONTROLE_DE_PEDIDOS
         public void IniciarEscutaMudancas()
         {
             if (_tarefaListener != null) return;
-            _ctsListener = new CancellationTokenSource();
-            _tarefaListener = Task.Run(() => LoopEscutaAsync(_ctsListener.Token));
+            // Token capturado AGORA: ler _ctsListener dentro da lambda pegaria null (ou
+            // o CTS de outro ciclo) se a escuta fosse parada/reiniciada antes do Task.Run rodar.
+            var cts = new CancellationTokenSource();
+            var token = cts.Token;
+            _ctsListener = cts;
+            _tarefaListener = Task.Run(() => LoopEscutaAsync(token));
+        }
+
+        /// <summary>
+        /// Encerra a escuta sem bloquear a UI. Usado ao trocar a configuração: a conexão
+        /// dedicada continuava no servidor/banco ANTIGO (o WaitAsync não volta sozinho),
+        /// e o IniciarEscutaMudancas seguinte não fazia nada porque a tarefa existia.
+        /// O Form1 religa a escuta quando a nova conexão é confirmada.
+        /// </summary>
+        private void CancelarEscutaMudancas()
+        {
+            var cts = _ctsListener;
+            var tarefa = _tarefaListener;
+            _ctsListener = null;
+            _tarefaListener = null;
+            if (cts == null) return;
+
+            try { cts.Cancel(); } catch { /* já descartado */ }
+            if (tarefa != null)
+                _ = tarefa.ContinueWith(_ => cts.Dispose(), TaskScheduler.Default);
+            else
+                cts.Dispose();
         }
 
         private async Task LoopEscutaAsync(CancellationToken ct)
@@ -200,7 +229,15 @@ namespace CONTROLE_DE_PEDIDOS
                     }
 
                     if (falhasSeguidas > 0)
+                    {
                         Logger.Info("Escuta de mudanças restabelecida.");
+                        // NOTIFY não é enfileirado para quem não está escutando: o que
+                        // outros operadores gravaram durante a queda se perdeu. Pede um
+                        // refresh (o dirty-check do Form1 descarta se nada mudou) em vez
+                        // de esperar o timer de segurança, que pode estar em backoff.
+                        try { MudancaNotificada?.Invoke(this, "reconexao"); }
+                        catch (Exception ex) { Logger.Warn($"Erro no handler de notificação: {ex.Message}"); }
+                    }
                     falhasSeguidas = 0;
 
                     // Bloqueia até chegar notificação (ou a conexão cair)
@@ -254,6 +291,11 @@ namespace CONTROLE_DE_PEDIDOS
                 Logger.Error("Erro ao salvar config.ini", ex);
             }
             _bancoControleGarantido = false;
+            CancelarEscutaMudancas();
+            // O Form1 zera _dadosIniciaisCarregados e espera um StatusAlterado para
+            // recarregar. Se a conexão seguia igual (ex.: trocou só a Filial), nenhum
+            // evento saía e a tela ficava sem auto-refresh e sem notificações até reabrir.
+            Interlocked.Exchange(ref _forcarNotificacaoStatus, 1);
             _ = VerificarConexaoAsync();
         }
 
@@ -269,11 +311,11 @@ namespace CONTROLE_DE_PEDIDOS
 
                 if (okIntegra)
                 {
+                    // Só marca como garantido se deu certo: antes o true era gravado mesmo
+                    // após falha (o catch interno zerava e a linha seguinte sobrescrevia),
+                    // e o banco nunca mais era criado até trocar a configuração.
                     if (!_bancoControleGarantido)
-                    {
-                        await GarantirBancoControleAsync().ConfigureAwait(false);
-                        _bancoControleGarantido = true;
-                    }
+                        _bancoControleGarantido = await GarantirBancoControleAsync().ConfigureAwait(false);
                     okControle = await TestarConexaoAsync(_config.ConnectionStringControle).ConfigureAwait(false);
                 }
 
@@ -283,6 +325,9 @@ namespace CONTROLE_DE_PEDIDOS
                 bool mudou = novoIntegra != _statusIntegra || novoControle != _statusControle;
                 _statusIntegra = novoIntegra;
                 _statusControle = novoControle;
+
+                if (Interlocked.Exchange(ref _forcarNotificacaoStatus, 0) == 1)
+                    mudou = true;
 
                 if (mudou)
                 {
@@ -305,7 +350,7 @@ namespace CONTROLE_DE_PEDIDOS
             }
         }
 
-        private async Task GarantirBancoControleAsync()
+        private async Task<bool> GarantirBancoControleAsync()
         {
             try
             {
@@ -319,14 +364,21 @@ namespace CONTROLE_DE_PEDIDOS
                 if (await cmdCheck.ExecuteScalarAsync().ConfigureAwait(false) == null)
                 {
                     using var cmdCreate = conn.CreateCommand();
-                    cmdCreate.CommandText = $"CREATE DATABASE \"{_config.BancoControle}\" ENCODING 'UTF8'";
+                    // Identificador não aceita parâmetro: escapa aspas duplas (nome vem do INI).
+                    var nome = _config.BancoControle.Replace("\"", "\"\"");
+                    cmdCreate.CommandText = $"CREATE DATABASE \"{nome}\" ENCODING 'UTF8'";
                     await cmdCreate.ExecuteNonQueryAsync().ConfigureAwait(false);
                 }
+                _falhasGarantirBanco = 0;
+                return true;
             }
             catch (Exception ex)
             {
-                _bancoControleGarantido = false;
-                Logger.Error("Erro ao garantir a existência do banco de controle", ex);
+                // Agora retenta a cada ciclo (15s): loga a 1ª falha e depois ~a cada 10 min,
+                // para uma falha persistente (ex.: sem acesso ao banco postgres) não inundar o log.
+                if (_falhasGarantirBanco++ % 40 == 0)
+                    Logger.Error("Erro ao garantir a existência do banco de controle", ex);
+                return false;
             }
         }
 
@@ -334,59 +386,69 @@ namespace CONTROLE_DE_PEDIDOS
         {
             if (!ControleConectado) return;
 
-            await ExecutarControleAsync(async conn =>
+            // O Form1 chama sem await (_ = GarantirTabelasAsync()): uma exceção aqui virava
+            // Task não observada e sumia sem log — ex.: corrida de CREATE ... IF NOT EXISTS
+            // entre várias instâncias subindo juntas (23505 em pg_type), ou falta de permissão.
+            try
             {
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-                    CREATE TABLE IF NOT EXISTS cadastro_rotas (
-                        id SERIAL PRIMARY KEY,
-                        nome VARCHAR(200) NOT NULL UNIQUE
-                    );
-                    CREATE TABLE IF NOT EXISTS orcamentos_ignorados (
-                        orcamento INTEGER PRIMARY KEY,
-                        motivo VARCHAR(300),
-                        data_inclusao TIMESTAMP NOT NULL DEFAULT NOW()
-                    );
-                    CREATE TABLE IF NOT EXISTS pedidos_controlados (
-                        orcamento INTEGER PRIMARY KEY,
-                        cliente VARCHAR(300) NOT NULL DEFAULT '',
-                        nome_fantasia VARCHAR(300) NOT NULL DEFAULT '',
-                        rota VARCHAR(200) NOT NULL DEFAULT '',
-                        aprovado BOOLEAN NOT NULL DEFAULT FALSE,
-                        em_separacao BOOLEAN NOT NULL DEFAULT FALSE,
-                        conferido BOOLEAN NOT NULL DEFAULT FALSE,
-                        liberado BOOLEAN NOT NULL DEFAULT FALSE,
-                        travado BOOLEAN NOT NULL DEFAULT FALSE,
-                        data_aprovacao TIMESTAMP NOT NULL DEFAULT NOW()
-                    );
-                    ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS travado BOOLEAN NOT NULL DEFAULT FALSE;
-                    ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS em_faturamento BOOLEAN NOT NULL DEFAULT FALSE;
-                    CREATE TABLE IF NOT EXISTS historico_exclusoes (
-                        id SERIAL PRIMARY KEY,
-                        orcamento INTEGER NOT NULL,
-                        cliente VARCHAR(300) NOT NULL DEFAULT '',
-                        nome_fantasia VARCHAR(300) NOT NULL DEFAULT '',
-                        rota VARCHAR(200) NOT NULL DEFAULT '',
-                        vendedor VARCHAR(200) NOT NULL DEFAULT '',
-                        pedido_venda INTEGER NOT NULL DEFAULT 0,
-                        nota_fiscal VARCHAR(20) NOT NULL DEFAULT '',
-                        status VARCHAR(40) NOT NULL DEFAULT '',
-                        aprovado BOOLEAN NOT NULL DEFAULT FALSE,
-                        em_separacao BOOLEAN NOT NULL DEFAULT FALSE,
-                        conferido BOOLEAN NOT NULL DEFAULT FALSE,
-                        liberado BOOLEAN NOT NULL DEFAULT FALSE,
-                        travado BOOLEAN NOT NULL DEFAULT FALSE,
-                        em_faturamento BOOLEAN NOT NULL DEFAULT FALSE,
-                        tipo_exclusao VARCHAR(10) NOT NULL DEFAULT '',
-                        usuario_windows VARCHAR(100) NOT NULL DEFAULT '',
-                        data_exclusao TIMESTAMP NOT NULL DEFAULT NOW()
-                    );
-                    CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_data
-                        ON historico_exclusoes (data_exclusao DESC);
-                    CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_orcamento
-                        ON historico_exclusoes (orcamento)";
-                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-            }).ConfigureAwait(false);
+                await ExecutarControleAsync(async conn =>
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = @"
+                        CREATE TABLE IF NOT EXISTS cadastro_rotas (
+                            id SERIAL PRIMARY KEY,
+                            nome VARCHAR(200) NOT NULL UNIQUE
+                        );
+                        CREATE TABLE IF NOT EXISTS orcamentos_ignorados (
+                            orcamento INTEGER PRIMARY KEY,
+                            motivo VARCHAR(300),
+                            data_inclusao TIMESTAMP NOT NULL DEFAULT NOW()
+                        );
+                        CREATE TABLE IF NOT EXISTS pedidos_controlados (
+                            orcamento INTEGER PRIMARY KEY,
+                            cliente VARCHAR(300) NOT NULL DEFAULT '',
+                            nome_fantasia VARCHAR(300) NOT NULL DEFAULT '',
+                            rota VARCHAR(200) NOT NULL DEFAULT '',
+                            aprovado BOOLEAN NOT NULL DEFAULT FALSE,
+                            em_separacao BOOLEAN NOT NULL DEFAULT FALSE,
+                            conferido BOOLEAN NOT NULL DEFAULT FALSE,
+                            liberado BOOLEAN NOT NULL DEFAULT FALSE,
+                            travado BOOLEAN NOT NULL DEFAULT FALSE,
+                            data_aprovacao TIMESTAMP NOT NULL DEFAULT NOW()
+                        );
+                        ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS travado BOOLEAN NOT NULL DEFAULT FALSE;
+                        ALTER TABLE pedidos_controlados ADD COLUMN IF NOT EXISTS em_faturamento BOOLEAN NOT NULL DEFAULT FALSE;
+                        CREATE TABLE IF NOT EXISTS historico_exclusoes (
+                            id SERIAL PRIMARY KEY,
+                            orcamento INTEGER NOT NULL,
+                            cliente VARCHAR(300) NOT NULL DEFAULT '',
+                            nome_fantasia VARCHAR(300) NOT NULL DEFAULT '',
+                            rota VARCHAR(200) NOT NULL DEFAULT '',
+                            vendedor VARCHAR(200) NOT NULL DEFAULT '',
+                            pedido_venda INTEGER NOT NULL DEFAULT 0,
+                            nota_fiscal VARCHAR(20) NOT NULL DEFAULT '',
+                            status VARCHAR(40) NOT NULL DEFAULT '',
+                            aprovado BOOLEAN NOT NULL DEFAULT FALSE,
+                            em_separacao BOOLEAN NOT NULL DEFAULT FALSE,
+                            conferido BOOLEAN NOT NULL DEFAULT FALSE,
+                            liberado BOOLEAN NOT NULL DEFAULT FALSE,
+                            travado BOOLEAN NOT NULL DEFAULT FALSE,
+                            em_faturamento BOOLEAN NOT NULL DEFAULT FALSE,
+                            tipo_exclusao VARCHAR(10) NOT NULL DEFAULT '',
+                            usuario_windows VARCHAR(100) NOT NULL DEFAULT '',
+                            data_exclusao TIMESTAMP NOT NULL DEFAULT NOW()
+                        );
+                        CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_data
+                            ON historico_exclusoes (data_exclusao DESC);
+                        CREATE INDEX IF NOT EXISTS ix_historico_exclusoes_orcamento
+                            ON historico_exclusoes (orcamento)";
+                    await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Erro ao garantir as tabelas do banco de controle", ex);
+            }
         }
 
         // =====================================================================
@@ -557,13 +619,43 @@ namespace CONTROLE_DE_PEDIDOS
             using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
             try
             {
-                int linhas;
+                // RETURNING: o histórico registra o estado REAL da linha apagada. O `reg`
+                // vem da tela, que pode estar defasada (outro operador avançou/travou o
+                // pedido entre o último refresh e o clique) — a auditoria gravava um
+                // status que o pedido já não tinha. Só o vendedor, pedido_venda e NF-e
+                // (que não existem nesta tabela) continuam vindo do `reg`.
+                int linhas = 0;
                 using (var cmdDel = conn.CreateCommand())
                 {
                     cmdDel.Transaction = tx;
-                    cmdDel.CommandText = "DELETE FROM pedidos_controlados WHERE orcamento = @orc";
+                    cmdDel.CommandText = @"
+                        DELETE FROM pedidos_controlados WHERE orcamento = @orc
+                        RETURNING cliente, nome_fantasia, rota,
+                                  aprovado, em_separacao, conferido, liberado, travado, em_faturamento";
                     cmdDel.Parameters.AddWithValue("orc", reg.Orcamento);
-                    linhas = await cmdDel.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    using var rd = await cmdDel.ExecuteReaderAsync().ConfigureAwait(false);
+                    if (await rd.ReadAsync().ConfigureAwait(false))
+                    {
+                        linhas = 1;   // orcamento é PK: no máximo uma linha
+                        reg = reg with
+                        {
+                            Cliente       = rd.GetString(0),
+                            NomeFantasia  = rd.GetString(1),
+                            Rota          = rd.GetString(2),
+                            Aprovado      = rd.GetBoolean(3),
+                            EmSeparacao   = rd.GetBoolean(4),
+                            Conferido     = rd.GetBoolean(5),
+                            Liberado      = rd.GetBoolean(6),
+                            Travado       = rd.GetBoolean(7),
+                            EmFaturamento = rd.GetBoolean(8),
+                        };
+                        reg = reg with
+                        {
+                            Status = ExclusaoRegistro.CalcularStatus(
+                                reg.Aprovado, reg.EmSeparacao, reg.Conferido,
+                                reg.Liberado, reg.Travado, reg.EmFaturamento, reg.PedidoVenda)
+                        };
+                    }
                 }
 
                 if (linhas > 0)

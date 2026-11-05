@@ -35,8 +35,11 @@ namespace CONTROLE_DE_PEDIDOS
                     // Identifica o processo: no RDS há 10+ instâncias gravando no MESMO
                     // arquivo, e sem isso é impossível saber de qual sessão veio a linha.
                     var linha = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{nivel}] [{Environment.ProcessId}] {mensagem}";
+                    // ex.ToString() inclui InnerException(s) — antes só a externa era gravada,
+                    // e wrappers (AggregateException, IOException do config, TargetInvocation)
+                    // escondiam a causa real.
                     if (ex != null)
-                        linha += $"{Environment.NewLine}  -> {ex.GetType().Name}: {ex.Message}{Environment.NewLine}  {ex.StackTrace}";
+                        linha += $"{Environment.NewLine}  -> {ex}";
 
                     EscreverComRetry(linha + Environment.NewLine);
                 }

@@ -33,17 +33,41 @@ namespace CONTROLE_DE_PEDIDOS
 
         // SOMENTE LEITURA - opcoes forcam read-only no nivel da sessao PostgreSQL
         public string ConnectionStringIntegra =>
-            $"Host={ServidorIP};Port={Porta};Database={BancoIntegra};Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer;Options=-c default_transaction_read_only=on";
+            MontarConnectionString(BancoIntegra, somenteLeitura: true);
 
         // ESCRITA EXCEPCIONAL - usar apenas no fluxo "Corrigir Observação".
         public string ConnectionStringIntegraEscrita =>
-            $"Host={ServidorIP};Port={Porta};Database={BancoIntegra};Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer";
+            MontarConnectionString(BancoIntegra, somenteLeitura: false);
 
         public string ConnectionStringControle =>
-            $"Host={ServidorIP};Port={Porta};Database={BancoControle};Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer";
+            MontarConnectionString(BancoControle, somenteLeitura: false);
 
         public string ConnectionStringServidor =>
-            $"Host={ServidorIP};Port={Porta};Database=postgres;Username={Usuario};Password={Senha};Timeout=5;SSL Mode=Prefer";
+            MontarConnectionString("postgres", somenteLeitura: false);
+
+        /// <summary>
+        /// Monta a connection string pelo builder do Npgsql, que escapa cada valor.
+        /// Interpolar direto quebrava com ';' / '=' / aspas na senha (ou no usuário): o
+        /// trecho após o ';' virava OUTRO parâmetro — inclusive podendo sobrescrever
+        /// o Options do read-only do Integra. Nunca lança: porta inválida (só possível
+        /// editando o INI à mão; o ConfigDialog valida) cai no padrão 5432.
+        /// </summary>
+        private string MontarConnectionString(string database, bool somenteLeitura)
+        {
+            var csb = new Npgsql.NpgsqlConnectionStringBuilder
+            {
+                Host = ServidorIP,
+                Port = int.TryParse(Porta, out var porta) && porta is >= 1 and <= 65535 ? porta : 5432,
+                Database = database,
+                Username = Usuario,
+                Password = Senha,
+                Timeout = 5,
+                SslMode = Npgsql.SslMode.Prefer
+            };
+            if (somenteLeitura)
+                csb.Options = "-c default_transaction_read_only=on";
+            return csb.ConnectionString;
+        }
 
         public void Salvar()
         {
@@ -88,7 +112,11 @@ namespace CONTROLE_DE_PEDIDOS
             };
             try
             {
-                File.WriteAllLines(ConfigPath, lines);
+                // Atômico: o config.ini fica ao lado do EXE e é lido por TODAS as sessões
+                // do RDS. WriteAllLines truncava e reescrevia no lugar — uma instância
+                // abrindo nesse instante recebia IOException (o app nem subia) ou lia
+                // um arquivo incompleto (chaves faltando = padrões, ex.: Filial=1).
+                ArquivoAtomico.GravarTexto(ConfigPath, string.Join(Environment.NewLine, lines) + Environment.NewLine);
             }
             catch (Exception ex)
             {
@@ -107,7 +135,7 @@ namespace CONTROLE_DE_PEDIDOS
                 return config;
             }
 
-            foreach (var line in File.ReadAllLines(ConfigPath))
+            foreach (var line in ArquivoAtomico.LerLinhas(ConfigPath))
             {
                 if (string.IsNullOrWhiteSpace(line) || line.StartsWith("["))
                     continue;
@@ -150,5 +178,65 @@ namespace CONTROLE_DE_PEDIDOS
 
             return config;
         }
+    }
+
+    /// <summary>
+    /// Leitura/gravação de arquivos pequenos compartilhados entre instâncias (RDS).
+    /// A gravação vai para um temporário e substitui o destino de uma vez: quem lê vê o
+    /// arquivo antigo ou o novo, nunca um pela metade. Tentativas curtas absorvem a
+    /// disputa momentânea com outra instância lendo/gravando o mesmo arquivo.
+    /// </summary>
+    internal static class ArquivoAtomico
+    {
+        private const int Tentativas = 10;   // ~1,5 s no pior caso
+
+        public static void GravarTexto(string caminho, string conteudo)
+        {
+            var temp = $"{caminho}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                File.WriteAllText(temp, conteudo, new System.Text.UTF8Encoding(false));
+                for (int i = 0; ; i++)
+                {
+                    try
+                    {
+                        File.Move(temp, caminho, overwrite: true);
+                        return;
+                    }
+                    catch (Exception ex) when (i < Tentativas - 1
+                                               && ex is IOException or UnauthorizedAccessException)
+                    {
+                        Thread.Sleep(15 + i * 25 + Random.Shared.Next(0, 20));
+                    }
+                }
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { /* sobra .tmp inofensiva */ }
+            }
+        }
+
+        public static string LerTexto(string caminho)
+        {
+            for (int i = 0; ; i++)
+            {
+                try
+                {
+                    using var fs = new FileStream(caminho, FileMode.Open, FileAccess.Read,
+                                                  FileShare.ReadWrite | FileShare.Delete);
+                    using var sr = new StreamReader(fs, detectEncodingFromByteOrderMarks: true);
+                    return sr.ReadToEnd();
+                }
+                catch (Exception ex) when (i < Tentativas - 1
+                                           && ex is IOException or UnauthorizedAccessException
+                                           && ex is not FileNotFoundException and not DirectoryNotFoundException)
+                {
+                    Thread.Sleep(15 + i * 25 + Random.Shared.Next(0, 20));
+                }
+            }
+        }
+
+        public static string[] LerLinhas(string caminho) =>
+            LerTexto(caminho).ReplaceLineEndings("\n").Split('\n');
     }
 }
