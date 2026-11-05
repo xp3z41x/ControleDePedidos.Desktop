@@ -284,6 +284,8 @@ namespace CONTROLE_DE_PEDIDOS
             // Defensivo: sem itens não há linha TOTAL — deixa o rodapé sair direto
             // (o handler nem constrói o documento com lista vazia).
             if (_itens.Count == 0) st.TotalOk = true;
+            // Página que começa só com o rodapé pendente (itens e TOTAL já emitidos).
+            bool soRodapeNestaPagina = st.Item >= _itens.Count && st.TotalOk;
 
             if (pagina == 1)
             {
@@ -361,9 +363,13 @@ namespace CONTROLE_DE_PEDIDOS
 
             // Rodapé do pedido: só depois de itens + TOTAL, e só se couber inteiro;
             // senão HasMorePages continua true e ele abre a próxima página sozinho.
+            // Garantia de progresso (espelho do guard itensNestaPagina > 0): numa página
+            // de continuação em que só resta o rodapé, ele sai mesmo sem caber — senão,
+            // com área útil pequena, nenhuma página o comporta e o job real nunca
+            // termina (a simulação para em 999, a impressão não).
             if (st.Item >= _itens.Count && st.TotalOk && !st.RodapeOk)
             {
-                if (y + 6f + AlturaRodape <= limiteY)
+                if (y + 6f + AlturaRodape <= limiteY || (pagina > 1 && soRodapeNestaPagina))
                 {
                     DesenharRodapePedido(g, penBorda, x, y + 6f, larguraTotal, medir);
                     st.RodapeOk = true;
