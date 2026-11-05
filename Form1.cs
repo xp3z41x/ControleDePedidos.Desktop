@@ -257,11 +257,17 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
-                _assinaturaOrcamentos = "";
-                dgvOrcamentos.DataSource = null;
-                lblContagem.Text = "";
-                Logger.Error("Erro ao carregar orçamentos", ex);
+                // Erro transitório (rede, timeout, failover) não pode esvaziar o grid: o
+                // operador perderia a seleção e o scroll a cada soluço. Mantém os últimos
+                // dados, marca o contador como desatualizado e invalida a assinatura para
+                // que o próximo refresh bem-sucedido rebinde de qualquer jeito.
+                _assinaturaOrcamentos = AssinaturaInvalida;
+                IndicarDesatualizado(lblContagem, true);
+                Logger.Error("Erro ao carregar orçamentos (mantidos os últimos dados exibidos)", ex);
+                return;
             }
+
+            IndicarDesatualizado(lblContagem, false);
         }
 
         private async Task CarregarAprovadosAsync()
@@ -416,11 +422,45 @@ namespace CONTROLE_DE_PEDIDOS
             }
             catch (Exception ex)
             {
-                _pedidosTodos = [];
-                _assinaturaPedidos = "";
-                dgvPedidos.DataSource = null;
-                lblContagemPedidos.Text = "";
-                Logger.Error("Erro ao carregar pedidos", ex);
+                // Mesma lógica dos orçamentos: mantém _pedidosTodos e o grid (as referências
+                // bindadas continuam válidas), só sinaliza que podem estar desatualizados.
+                _assinaturaPedidos = AssinaturaInvalida;
+                IndicarDesatualizado(lblContagemPedidos, true);
+                Logger.Error("Erro ao carregar pedidos (mantidos os últimos dados exibidos)", ex);
+                return;
+            }
+
+            IndicarDesatualizado(lblContagemPedidos, false);
+        }
+
+        /// <summary>
+        /// Valor que nunca coincide com uma assinatura real (nem com a de lista vazia, que é
+        /// ""): força o próximo refresh bem-sucedido a rebindar após uma falha.
+        /// </summary>
+        private const string AssinaturaInvalida = "\u0000";
+
+        private const string SufixoDesatualizado = " · desatualizado";
+
+        /// <summary>
+        /// Indicativo discreto de falha no refresh: sufixo + cor de aviso no rótulo de
+        /// contagem do grid. Idempotente nos dois sentidos; o texto-base é preservado
+        /// porque outros caminhos (RemoverOrcamentoDoGrid, AplicarFiltros) o reescrevem.
+        /// </summary>
+        private static void IndicarDesatualizado(Label lbl, bool desatualizado)
+        {
+            string texto = lbl.Text;
+            bool marcado = texto.EndsWith(SufixoDesatualizado, StringComparison.Ordinal);
+            if (desatualizado)
+            {
+                if (!marcado)
+                    lbl.Text = (texto.Length > 0 ? texto : "dados") + SufixoDesatualizado;
+                lbl.ForeColor = Theme.Warning;
+            }
+            else if (marcado || lbl.ForeColor != Theme.TextMuted)
+            {
+                if (marcado)
+                    lbl.Text = texto[..^SufixoDesatualizado.Length];
+                lbl.ForeColor = Theme.TextMuted;
             }
         }
 
