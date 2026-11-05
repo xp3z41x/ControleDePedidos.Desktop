@@ -601,11 +601,16 @@ namespace CONTROLE_DE_PEDIDOS
                     var dict = new Dictionary<int, string>();
                     using var cmd = conn.CreateCommand();
                     var paramList = string.Join(",", lista.Select((_, i) => $"@p{i}"));
+                    // Um orçamento pode ter várias NF-e no estmov (reemissões; ex.: 4 ou 25
+                    // linhas). Antes vencia a última linha lida — arbitrária. Agora: só a
+                    // mais recente (emissão, depois número) e nunca a nota 0.
                     cmd.CommandText = $@"
-                        SELECT observacao, nota_fiscal
+                        SELECT DISTINCT ON (observacao) observacao, nota_fiscal
                           FROM estmov
                          WHERE filial = @filial
-                           AND observacao IN ({paramList})";
+                           AND observacao IN ({paramList})
+                           AND nota_fiscal > 0
+                         ORDER BY observacao, dtemissao DESC, nota_fiscal DESC";
                     cmd.Parameters.AddWithValue("filial", _config.FilialFiscal);
                     for (int i = 0; i < lista.Count; i++)
                         cmd.Parameters.AddWithValue($"p{i}", lista[i].ToString());

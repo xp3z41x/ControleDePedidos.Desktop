@@ -100,7 +100,7 @@ Fatos medidos em produção (filial 5, ago/2026): `data_inc`/`hora_inc` 100 % pr
 
 ### `estmov` — movimentação fiscal
 
-- **Correlação de NF-e**: `estmov.observacao` (texto) armazena, por convenção do processo fiscal da empresa, o número do orçamento; o app busca `nota_fiscal` com `WHERE filial = FilialFiscal AND observacao IN (...)` (best-effort, nunca lança; sem filtro de cancelamento — a última linha lida vence).
+- **Correlação de NF-e**: `estmov.observacao` (texto) armazena, por convenção do processo fiscal da empresa, o número do orçamento; o app busca `nota_fiscal` com `WHERE filial = FilialFiscal AND observacao IN (...)` (best-effort, nunca lança). Um orçamento pode ter várias linhas (reemissões): vale só a mais recente — `DISTINCT ON (observacao) … ORDER BY dtemissao DESC, nota_fiscal DESC` — e notas `0` são ignoradas.
 - **Única escrita sancionada no Integra**: fluxo "Corrigir Observação" → `UPDATE estmov SET observacao=@obs WHERE filial=@filialFiscal AND pedido=@pedido` (sem LIMIT; pode afetar N linhas — o app informa quantas). Não adicionar novos consumidores da connection string de escrita sem revisão.
 
 ## Conexões e filiais
