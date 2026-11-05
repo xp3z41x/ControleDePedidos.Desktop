@@ -10,6 +10,7 @@ namespace CONTROLE_DE_PEDIDOS
         private Label lblContagem = null!;
         private SortableBindingList<OrcamentoIgnorado> _lista = [];
         private bool _alterou;
+        private bool _ocupado;
 
         public IgnoradosForm()
         {
@@ -206,6 +207,7 @@ namespace CONTROLE_DE_PEDIDOS
                         ids.Add(reader.GetInt32(0));
                     return ids;
                 });
+                if (IsDisposed) return; // janela fechada durante a carga
 
                 if (ignorados == null || ignorados.Count == 0)
                 {
@@ -258,6 +260,7 @@ namespace CONTROLE_DE_PEDIDOS
                     }
                     return result;
                 });
+                if (IsDisposed) return;
 
                 _lista = new SortableBindingList<OrcamentoIgnorado>(dados ?? []);
                 dgvIgnorados.SuspendLayout();
@@ -282,6 +285,7 @@ namespace CONTROLE_DE_PEDIDOS
 
         private async void BtnRemover_Click(object? sender, EventArgs e)
         {
+            if (_ocupado) return;
             if (dgvIgnorados.CurrentRow?.DataBoundItem is not OrcamentoIgnorado item) return;
 
             var confirm = MessageBox.Show(this,
@@ -291,6 +295,11 @@ namespace CONTROLE_DE_PEDIDOS
 
             if (confirm != DialogResult.Yes) return;
 
+            // Sem a trava, um segundo clique durante o await repetia o DELETE e exibia um
+            // falso "restaurado por outro usuário"; fechar no meio perdia o _alterou
+            // (Form1 não recarregava) e o MessageBox(this) estourava em form descartado.
+            _ocupado = true;
+            btnRemover.Enabled = false;
             try
             {
                 var linhas = await _db.ExecutarControleComLinhasAsync(async conn =>
@@ -315,6 +324,11 @@ namespace CONTROLE_DE_PEDIDOS
                 MessageBox.Show(this, $"Erro ao restaurar: {ex.Message}", "Erro",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally
+            {
+                _ocupado = false;
+                btnRemover.Enabled = true;
+            }
         }
 
         private void AtualizarContagem()
@@ -324,6 +338,11 @@ namespace CONTROLE_DE_PEDIDOS
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (_ocupado && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                return;
+            }
             if (_alterou)
                 DialogResult = DialogResult.OK;
             base.OnFormClosing(e);
