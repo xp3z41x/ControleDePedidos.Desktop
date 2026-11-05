@@ -1,5 +1,65 @@
 namespace CONTROLE_DE_PEDIDOS
 {
+    /// <summary>
+    /// Escala de layout por DPI (PerMonitorV2). Toda medida fixa de UI (Size, Location,
+    /// Padding, alturas de faixas/linhas de grid) é escrita em pixels LÓGICOS a 96 DPI e
+    /// convertida aqui para o DPI corrente do controle — fontes em pontos já crescem
+    /// sozinhas, o resto não. A 100% é a identidade (visual idêntico ao de antes).
+    /// Linhas de 1 px (bordas/separadores) NÃO passam por aqui: ficam com 1 px em qualquer DPI.
+    /// </summary>
+    public static class Escala
+    {
+#if SIMULAR_DPI
+        // Só no harness de verificação (nunca definido no build do app): simula a escala
+        // multiplicando fontes e medidas, já que o display RDP não permite trocar o DPI.
+        public static readonly float FatorSimulado =
+            float.TryParse(Environment.GetEnvironmentVariable("CP_DPI_SIMULADO"),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var f) && f > 0 ? f : 1f;
+#endif
+
+        /// <summary>Pixels lógicos (96 DPI) → pixels do DPI corrente do controle.</summary>
+        public static int Px(this Control c, int logico)
+        {
+#if SIMULAR_DPI
+            return (int)Math.Round(logico * (double)c.DeviceDpi * FatorSimulado / 96.0);
+#else
+            return c.LogicalToDeviceUnits(logico);
+#endif
+        }
+
+        public static Size Px(this Control c, Size s) => new(c.Px(s.Width), c.Px(s.Height));
+        public static Point Px(this Control c, Point p) => new(c.Px(p.X), c.Px(p.Y));
+        public static Padding Px(this Control c, Padding p) =>
+            new(c.Px(p.Left), c.Px(p.Top), c.Px(p.Right), c.Px(p.Bottom));
+
+        /// <summary>Pixels do DPI corrente → lógicos (persistência independente de DPI).</summary>
+        public static int ParaLogico(this Control c, int px) =>
+            Math.Max(1, (int)Math.Round(px * 96.0 / Math.Max(1, c.Px(96))));
+
+        /// <summary>Fonte em pontos (o Windows já a escala pelo DPI).</summary>
+        public static Font Fonte(string familia, float pontos)
+        {
+#if SIMULAR_DPI
+            pontos *= FatorSimulado;
+#endif
+            return new Font(familia, pontos);
+        }
+    }
+
+    /// <summary>
+    /// Base dos diálogos/forms montados em código: <c>Dpi(...)</c> converte medidas lógicas
+    /// (96 DPI) para o DPI corrente — mesma convenção do Form1.
+    /// </summary>
+    public class FormEscalavel : Form
+    {
+        protected int Dpi(int v) => this.Px(v);
+        protected Size Dpi(int largura, int altura) => this.Px(new Size(largura, altura));
+        protected Point DpiPt(int x, int y) => this.Px(new Point(x, y));
+        protected Padding Dpi(int esquerda, int topo, int direita, int baixo) =>
+            this.Px(new Padding(esquerda, topo, direita, baixo));
+    }
+
     public static class Theme
     {
         // Backgrounds
@@ -43,19 +103,19 @@ namespace CONTROLE_DE_PEDIDOS
         public static readonly Color StatusTravadoFg = Color.FromArgb(210, 153, 34);
         public static readonly Color StatusEmFaturamentoBg = Color.FromArgb(20, 50, 60);
         public static readonly Color StatusEmFaturamentoFg = Color.FromArgb(100, 200, 220);
-        public static readonly Font FontStatus = new("Segoe UI Semibold", 9f);
+        public static readonly Font FontStatus = Escala.Fonte("Segoe UI Semibold", 9f);
 
         // Fonts
-        public static readonly Font FontRegular = new("Segoe UI", 9.5f);
-        public static readonly Font FontRegularBold = new("Segoe UI Semibold", 9.5f);
-        public static readonly Font FontSmall = new("Segoe UI", 8.5f);
-        public static readonly Font FontTitle = new("Segoe UI Semibold", 12f);
-        public static readonly Font FontHeader = new("Segoe UI Semibold", 9f);
-        public static readonly Font FontIcon = new("Segoe UI", 13f);
-        public static readonly Font FontDetalheLabel = new("Segoe UI", 7.5f);
-        public static readonly Font FontDetalheValor = new("Segoe UI", 10f);
-        public static readonly Font FontDetalheDestaque = new("Segoe UI Semibold", 13f);
-        public static readonly Font FontSecaoTitulo = new("Segoe UI Semibold", 8f);
+        public static readonly Font FontRegular = Escala.Fonte("Segoe UI", 9.5f);
+        public static readonly Font FontRegularBold = Escala.Fonte("Segoe UI Semibold", 9.5f);
+        public static readonly Font FontSmall = Escala.Fonte("Segoe UI", 8.5f);
+        public static readonly Font FontTitle = Escala.Fonte("Segoe UI Semibold", 12f);
+        public static readonly Font FontHeader = Escala.Fonte("Segoe UI Semibold", 9f);
+        public static readonly Font FontIcon = Escala.Fonte("Segoe UI", 13f);
+        public static readonly Font FontDetalheLabel = Escala.Fonte("Segoe UI", 7.5f);
+        public static readonly Font FontDetalheValor = Escala.Fonte("Segoe UI", 10f);
+        public static readonly Font FontDetalheDestaque = Escala.Fonte("Segoe UI Semibold", 13f);
+        public static readonly Font FontSecaoTitulo = Escala.Fonte("Segoe UI Semibold", 8f);
 
         public static void EstilizarBotao(Button btn, bool primario = false)
         {
@@ -86,6 +146,7 @@ namespace CONTROLE_DE_PEDIDOS
         public static void LimitarAoWorkingArea(Form f, int margem = 48)
         {
             var tela = Screen.FromControl(f.Owner ?? f).WorkingArea;
+            margem = f.Px(margem);
             var moldura = new Size(f.Width - f.ClientSize.Width, f.Height - f.ClientSize.Height);
             int maxW = tela.Width - margem - moldura.Width;
             int maxH = tela.Height - margem - moldura.Height;
@@ -121,7 +182,8 @@ namespace CONTROLE_DE_PEDIDOS
                 // do usuário — persistir apenas o drag manual.
                 if (GridLayout.EstaAjustando(dgv)) return;
                 GridLayout.AtualizarPreferencia(dgv, col.Name, col.Width);
-                ColumnWidthStore.SetWidth(gridKey, col.Name, col.Width);
+                // Persistida em pixels LÓGICOS: a mesma preferência vale em qualquer DPI
+                ColumnWidthStore.SetWidth(gridKey, col.Name, dgv.ParaLogico(col.Width));
             };
         }
 
@@ -163,14 +225,20 @@ namespace CONTROLE_DE_PEDIDOS
                 if (dgv.IsHandleCreated)
                     dgv.BeginInvoke(() => AutoAjustarColunas(dgv));
             };
-            dgv.ColumnHeadersHeight = 36;
-            dgv.RowTemplate.Height = 32;
+            AplicarMetricasGrid(dgv);
+            // PerMonitorV2: DPI mudou com o app aberto (reconexão RDP de outro cliente,
+            // troca de monitor) — reaplica as métricas no DPI novo depois do reescalonamento
+            // do próprio WinForms (valores absolutos: idempotente).
+            dgv.DpiChangedAfterParent += (_, _) =>
+            {
+                if (dgv.IsHandleCreated) dgv.BeginInvoke(() => AplicarMetricasGrid(dgv));
+                else AplicarMetricasGrid(dgv);
+            };
 
             dgv.DefaultCellStyle.BackColor = BgPanel;
             dgv.DefaultCellStyle.ForeColor = TextPrimary;
             dgv.DefaultCellStyle.SelectionBackColor = GridSelection;
             dgv.DefaultCellStyle.SelectionForeColor = TextPrimary;
-            dgv.DefaultCellStyle.Padding = new Padding(8, 4, 8, 4);
 
             dgv.AlternatingRowsDefaultCellStyle.BackColor = GridRowAlt;
             dgv.AlternatingRowsDefaultCellStyle.ForeColor = TextPrimary;
@@ -180,7 +248,6 @@ namespace CONTROLE_DE_PEDIDOS
             dgv.ColumnHeadersDefaultCellStyle.BackColor = BgCard;
             dgv.ColumnHeadersDefaultCellStyle.ForeColor = TextPrimary;
             dgv.ColumnHeadersDefaultCellStyle.Font = FontHeader;
-            dgv.ColumnHeadersDefaultCellStyle.Padding = new Padding(8, 6, 8, 6);
             dgv.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             // Título nunca quebra linha: sem espaço, o texto é abreviado com reticências
             dgv.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.False;
@@ -206,17 +273,34 @@ namespace CONTROLE_DE_PEDIDOS
                 var glifo = dgv.Columns[e.ColumnIndex].HeaderCell.SortGlyphDirection;
                 if (glifo != SortOrder.None)
                 {
-                    int cx = e.CellBounds.Right - 14;
+                    int cx = e.CellBounds.Right - dgv.Px(14);
                     int cy = e.CellBounds.Top + e.CellBounds.Height / 2;
+                    int dx = dgv.Px(4), d2 = dgv.Px(2), d3 = dgv.Px(3);
                     using var brush = new SolidBrush(TextSecondary);
                     Point[] seta = glifo == SortOrder.Ascending
-                        ? [new Point(cx - 4, cy + 2), new Point(cx + 4, cy + 2), new Point(cx, cy - 3)]
-                        : [new Point(cx - 4, cy - 2), new Point(cx + 4, cy - 2), new Point(cx, cy + 3)];
+                        ? [new Point(cx - dx, cy + d2), new Point(cx + dx, cy + d2), new Point(cx, cy - d3)]
+                        : [new Point(cx - dx, cy - d2), new Point(cx + dx, cy - d2), new Point(cx, cy + d3)];
                     e.Graphics!.FillPolygon(brush, seta);
                 }
 
                 e.Handled = true;
             };
+        }
+
+        /// <summary>
+        /// Alturas de cabeçalho/linha e paddings de célula no DPI corrente (lógicos: 36/32,
+        /// 8-4-8-4 e 8-6-8-6). Chamado na estilização e a cada mudança de DPI.
+        /// </summary>
+        public static void AplicarMetricasGrid(DataGridView dgv)
+        {
+            int alturaLinha = dgv.Px(32);
+            dgv.ColumnHeadersHeight = dgv.Px(36);
+            dgv.RowTemplate.Height = alturaLinha;
+            dgv.DefaultCellStyle.Padding = dgv.Px(new Padding(8, 4, 8, 4));
+            dgv.ColumnHeadersDefaultCellStyle.Padding = dgv.Px(new Padding(8, 6, 8, 6));
+            // Linhas já criadas não seguem o RowTemplate (só relevante na troca de DPI)
+            foreach (DataGridViewRow r in dgv.Rows)
+                if (r.Height != alturaLinha) r.Height = alturaLinha;
         }
 
         public static void AutoAjustarColunas(DataGridView dgv)
@@ -233,7 +317,7 @@ namespace CONTROLE_DE_PEDIDOS
                     {
                         if (!col.Visible) continue;
                         if (ColumnWidthStore.TryGetWidth(gridKey, col.Name, out int savedWidth))
-                            col.Width = savedWidth;
+                            col.Width = dgv.Px(savedWidth);
                     }
                 });
                 GridLayout.DefinirPreferencias(dgv);
@@ -255,7 +339,8 @@ namespace CONTROLE_DE_PEDIDOS
 
                     // Medir header
                     var headerSize = g.MeasureString(col.HeaderText ?? "", dgv.ColumnHeadersDefaultCellStyle.Font ?? dgv.Font);
-                    int maxWidth = (int)headerSize.Width + 24; // padding
+                    int folga = dgv.Px(24); // padding
+                    int maxWidth = (int)headerSize.Width + folga;
 
                     // Medir conteudo das celulas (amostra das primeiras 50 linhas)
                     int rowsToCheck = Math.Min(dgv.RowCount, 50);
@@ -265,11 +350,11 @@ namespace CONTROLE_DE_PEDIDOS
                         if (string.IsNullOrEmpty(val)) continue;
                         var cellFont = dgv.Rows[i].Cells[col.Index].InheritedStyle.Font ?? dgv.Font;
                         var cellSize = g.MeasureString(val, cellFont);
-                        int cellWidth = (int)cellSize.Width + 24;
+                        int cellWidth = (int)cellSize.Width + folga;
                         if (cellWidth > maxWidth) maxWidth = cellWidth;
                     }
 
-                    int minWidth = col.MinimumWidth > 0 ? col.MinimumWidth : 50;
+                    int minWidth = col.MinimumWidth > 0 ? col.MinimumWidth : dgv.Px(50);
                     col.Width = Math.Clamp(maxWidth, minWidth, Math.Max(teto, minWidth));
                 }
             });
@@ -339,13 +424,15 @@ namespace CONTROLE_DE_PEDIDOS
         protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
         {
             var rc = e.ImageRectangle;
-            using var pen = new Pen(Theme.Accent, 2f);
+            var ts = e.ToolStrip;
+            int Px(int v) => ts?.Px(v) ?? v;
+            using var pen = new Pen(Theme.Accent, Px(2));
             // Desenhar um check-mark simples
             var pts = new[]
             {
-                new Point(rc.Left + 3, rc.Top + rc.Height / 2),
-                new Point(rc.Left + rc.Width / 2 - 1, rc.Bottom - 4),
-                new Point(rc.Right - 3, rc.Top + 3)
+                new Point(rc.Left + Px(3), rc.Top + rc.Height / 2),
+                new Point(rc.Left + rc.Width / 2 - Px(1), rc.Bottom - Px(4)),
+                new Point(rc.Right - Px(3), rc.Top + Px(3))
             };
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             e.Graphics.DrawLines(pen, pts);
@@ -360,17 +447,18 @@ namespace CONTROLE_DE_PEDIDOS
         protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
         {
             var rc = new Rectangle(Point.Empty, e.Item.Size);
+            int m = e.ToolStrip?.Px(6) ?? 6;
             if (e.Vertical)
             {
                 int x = rc.Width / 2;
                 using var pen = new Pen(Theme.Border);
-                e.Graphics.DrawLine(pen, x, 6, x, rc.Height - 6);
+                e.Graphics.DrawLine(pen, x, m, x, rc.Height - m);
             }
             else
             {
                 int y = rc.Height / 2;
                 using var pen = new Pen(Theme.Border);
-                e.Graphics.DrawLine(pen, 6, y, rc.Width - 6, y);
+                e.Graphics.DrawLine(pen, m, y, rc.Width - m, y);
             }
         }
     }

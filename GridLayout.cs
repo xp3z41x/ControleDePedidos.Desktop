@@ -17,6 +17,7 @@ namespace CONTROLE_DE_PEDIDOS
             public string? GridKey;
             public bool Ajustando;      // larguras sendo aplicadas por código (não persistir)
             public bool AjustePendente; // coalescing de Resize/RowsAdded/RowsRemoved
+            public int EscalaPreferidas; // Px(96) do DPI em que as Preferidas foram medidas
         }
 
         private static readonly ConditionalWeakTable<DataGridView, Estado> _estados = new();
@@ -47,13 +48,32 @@ namespace CONTROLE_DE_PEDIDOS
             _estados.TryGetValue(dgv, out var st) && st.Ajustando;
 
         /// <summary>Registra a largura arrastada pelo usuário como nova preferência absoluta.</summary>
-        public static void AtualizarPreferencia(DataGridView dgv, string coluna, int largura) =>
-            _estados.GetOrCreateValue(dgv).Preferidas[coluna] = largura;
+        public static void AtualizarPreferencia(DataGridView dgv, string coluna, int largura)
+        {
+            var st = _estados.GetOrCreateValue(dgv);
+            SincronizarDpi(dgv, st);
+            st.Preferidas[coluna] = largura;
+        }
+
+        /// <summary>
+        /// As preferidas ficam em pixels do DPI em que foram medidas; se o DPI do grid mudou
+        /// (PerMonitorV2: reconexão RDP/troca de monitor), reescalam na mesma proporção.
+        /// </summary>
+        private static void SincronizarDpi(DataGridView dgv, Estado st)
+        {
+            int escala = dgv.Px(96);
+            if (st.EscalaPreferidas == escala) return;
+            if (st.EscalaPreferidas > 0)
+                foreach (var k in st.Preferidas.Keys.ToList())
+                    st.Preferidas[k] = (int)Math.Round(st.Preferidas[k] * (double)escala / st.EscalaPreferidas);
+            st.EscalaPreferidas = escala;
+        }
 
         /// <summary>Snapshot: as larguras correntes das colunas viram as preferidas.</summary>
         public static void DefinirPreferencias(DataGridView dgv)
         {
             var st = _estados.GetOrCreateValue(dgv);
+            SincronizarDpi(dgv, st);
             foreach (DataGridViewColumn col in dgv.Columns)
                 if (col.Visible && col.AutoSizeMode != DataGridViewAutoSizeColumnMode.Fill)
                     st.Preferidas[col.Name] = col.Width;
@@ -75,6 +95,7 @@ namespace CONTROLE_DE_PEDIDOS
             if (!dgv.IsHandleCreated || dgv.Columns.Count == 0) return;
             var st = _estados.GetOrCreateValue(dgv);
             if (st.Ajustando) return;
+            SincronizarDpi(dgv, st);
 
             var cols = dgv.Columns.Cast<DataGridViewColumn>()
                 .Where(c => c.Visible && c.AutoSizeMode != DataGridViewAutoSizeColumnMode.Fill)
@@ -85,21 +106,22 @@ namespace CONTROLE_DE_PEDIDOS
             foreach (var c in cols)
             {
                 if (st.Preferidas.ContainsKey(c.Name)) continue;
+                // O store guarda pixels lógicos (96 DPI)
                 st.Preferidas[c.Name] =
                     st.GridKey != null && ColumnWidthStore.TryGetWidth(st.GridKey, c.Name, out int salvo)
-                        ? salvo
+                        ? dgv.Px(salvo)
                         : c.Width;
             }
 
             // Largura útil: área cliente menos scrollbar vertical visível e reserva das colunas
-            // Fill. A folga de 2px evita que bordas internas do DGV disparem a scrollbar
+            // Fill (mínimos em pixels lógicos, escalados). A folga de 2px evita que bordas internas do DGV disparem a scrollbar
             // horizontal quando a soma bate exatamente na largura do client.
             int util = dgv.ClientSize.Width - 2;
             if (dgv.Controls.OfType<VScrollBar>().Any(sb => sb.Visible))
                 util -= SystemInformation.VerticalScrollBarWidth;
             foreach (DataGridViewColumn c in dgv.Columns)
                 if (c.Visible && c.AutoSizeMode == DataGridViewAutoSizeColumnMode.Fill)
-                    util -= Math.Max(c.MinimumWidth, 50);
+                    util -= Math.Max(c.MinimumWidth, dgv.Px(50));
             if (util <= 0) return;
 
             long somaPref = cols.Sum(c => (long)st.Preferidas[c.Name]);
@@ -127,7 +149,7 @@ namespace CONTROLE_DE_PEDIDOS
                     if (somaLivres <= 0) break;
                     foreach (var c in livres.ToList())
                     {
-                        int min = Math.Max(c.MinimumWidth, 30);
+                        int min = Math.Max(c.MinimumWidth, dgv.Px(30));
                         int prop = (int)(st.Preferidas[c.Name] * (long)restante / somaLivres);
                         if (prop < min)
                         {
@@ -149,7 +171,7 @@ namespace CONTROLE_DE_PEDIDOS
                         int w = i == livres.Count - 1
                             ? restante - usado // última coluna absorve o arredondamento
                             : (int)(st.Preferidas[c.Name] * (long)restante / somaLivres);
-                        alvo[c] = Math.Max(w, Math.Max(c.MinimumWidth, 30));
+                        alvo[c] = Math.Max(w, Math.Max(c.MinimumWidth, dgv.Px(30)));
                         usado += alvo[c];
                     }
                 }
