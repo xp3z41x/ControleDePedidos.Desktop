@@ -51,8 +51,14 @@ namespace CONTROLE_DE_PEDIDOS
         public string Marca { get; set; } = "";
         public string Referencia { get; set; } = "";
         public decimal Quantidade { get; set; }
+        /// <summary>estior.vr_unitario — unitário JÁ COM desconto (o que o cliente paga).</summary>
         public decimal VrUnitario { get; set; }
+        /// <summary>estior.vr_total — total do item JÁ COM desconto (= Quantidade × VrUnitario).</summary>
         public decimal VrTotal { get; set; }
+        /// <summary>estior.vr_prazo — unitário ORIGINAL, antes do desconto (o "Valor a Prazo"
+        /// do impresso do próprio Integra). Nunca menor que VrUnitario na filial 5 (nov/2026).
+        /// Igual a VrUnitario = item sem desconto.</summary>
+        public decimal VrOriginal { get; set; }
     }
 
     /// <summary>
