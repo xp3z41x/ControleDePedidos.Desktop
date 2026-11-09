@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-11.7.0-0969da?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-11.8.0-0969da?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/.NET-10-512BD4?style=flat-square&logo=dotnet" alt=".NET 10">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%2FServer-0078D6?style=flat-square&logo=windows" alt="Windows">
   <img src="https://img.shields.io/badge/database-PostgreSQL-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
@@ -42,7 +42,7 @@ Flags como `travado` bloqueiam edições manuais sem criar lock de banco; `Em Fa
 - **Histórico de exclusões** (append-only) — todo pedido excluído é registrado com orçamento, cliente, NFe, status do momento, data/hora e usuário Windows. Consultável via tela dedicada com busca multi-campo e botão de limpeza dos registros com mais de 3 meses.
 - **Travar/Destravar e Assumir/Largar** — cadeado por pedido e sinalização de "em faturamento" para coordenar a equipe sem locks de banco.
 - **Correção de observação** — fluxo excepcional que permite gravar no Integra apenas o campo de observação do orçamento (única exceção ao read-only).
-- **Relatórios imprimíveis** — Relatório de Carga, Relatório de NF-e, **Relatório de Separação de Mercadorias** (com código de barras Code 128 e avanço automático de status na impressão física) e **Cópia de Pedido** para o cliente (logomarca embutida, preços, valor negociado, "Página X de Y").
+- **Relatórios imprimíveis** — Relatório de Carga, Relatório de NF-e, **Relatório de Separação de Mercadorias** (com código de barras Code 128 e avanço automático de status na impressão física) e **Cópia de Pedido** para o cliente (logomarca embutida, preços — com preço original, preço com desconto e % quando o pedido tem desconto —, valor negociado, "Página X de Y").
 - **Imprimir por Orçamento (Ctrl+P)** — mini-janela que imprime separação/cópia de **qualquer** orçamento pelo número, inclusive antigos fora do grid, sem alterar status.
 - **Tela quase ao vivo** — ações de outros operadores aparecem em menos de 1 segundo (canal PostgreSQL `LISTEN/NOTIFY` entre as instâncias); mudanças do Integra em até 15 segundos, com backoff por foco, pausa em sessão RDP desconectada e comparação em memória que evita repintar o grid sem necessidade.
 - **Tema dark nativo** pintado em todos os controles WinForms, com layout responsivo até 1366×768.
