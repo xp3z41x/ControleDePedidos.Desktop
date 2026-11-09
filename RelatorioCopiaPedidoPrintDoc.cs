@@ -124,6 +124,9 @@ namespace CONTROLE_DE_PEDIDOS
         // qualquer LayoutPagina — header com quebra e linha TOTAL de dois níveis.
         private float _alturaHeader = AlturaHeaderTabela;
         private float _alturaLinhaTotal = AlturaLinhaTotal;
+        /// <summary>Altura da linha do aviso de arredondamento (FontAviso.GetHeight);
+        /// 0 em pedido sem desconto — aí o layout é idêntico ao de sempre.</summary>
+        private float _alturaAviso;
         private EstadoPaginacao _estado = new();
 
         /// <summary>Posição da renderização entre páginas. Uma instância para o job real
@@ -145,6 +148,15 @@ namespace CONTROLE_DE_PEDIDOS
         private static readonly Font FontHeader = new("Segoe UI Semibold", 7.5f);
         private static readonly Font FontDados = new("Segoe UI", 7.5f);
         private static readonly Font FontTotal = new("Segoe UI Semibold", 8.5f);
+        // Aviso de arredondamento (só pedido COM desconto), uma linha acima do 1º trecho
+        // do grid e outra sob o bloco de totais. 7pt itálico medido no DC da impressora
+        // (COL-A4/LAG-A4/SDN-A4/ESCRITORIO): frase = 575 de largura, altura 12,9 —
+        // cabe numa linha só na largura útil de retrato (747) com ~23% de folga, logo
+        // também em paisagem (1089). Texto fixo, definido pelo dono: não editar.
+        private static readonly Font FontAviso = new("Segoe UI", 7f, FontStyle.Italic);
+        private const string AvisoArredondamento =
+            "A porcentagem de desconto pode ficar um pouco diferente da combinada em alguns casos, devido ao arredondamento dos centavos.";
+        private const float GapAviso = 3f;
 
         private const string FraseLegal =
             "NÃO É DOCUMENTO FISCAL - NÃO É VÁLIDO COMO RECIBO E COMO GARANTIA DE MERCADORIA - NÃO COMPROVA PAGAMENTO";
@@ -163,6 +175,10 @@ namespace CONTROLE_DE_PEDIDOS
         /// NEGOCIADO quando existir. Usado também no lookahead da paginação — as duas
         /// linhas nunca se separam do último item.</summary>
         private float AlturaBlocoTotais => _alturaLinhaTotal + (_temNegociado ? AlturaLinhaTotal : 0f);
+        /// <summary>Tudo que fecha o grid e precisa sair na página do último item:
+        /// bloco de totais + aviso de arredondamento (só com desconto). É o que o
+        /// lookahead reserva — o aviso nunca fica órfão em outra página.</summary>
+        private float AlturaFechamento => AlturaBlocoTotais + (_temDesconto ? GapAviso + _alturaAviso : 0f);
         // Campo SEM/COM DESCONTO da linha TOTAL: rótulo pequeno em cima, valor embaixo.
         private const float PadCampoTotal = 3f;
         private const float AlturaRodape = 50f;
@@ -270,6 +286,7 @@ namespace CONTROLE_DE_PEDIDOS
             _alturasLinhas = null;
             _alturaHeader = AlturaHeaderTabela;
             _alturaLinhaTotal = AlturaLinhaTotal;
+            _alturaAviso = 0f;
             _preview = e.PrintAction == PrintAction.PrintToPreview;
             // Uma medição por JOB; OnBeginPrint roda depois do PrintDialog.
             _geo = PrintingHelper.GeometriaPagina.Medir(DefaultPageSettings);
@@ -317,6 +334,16 @@ namespace CONTROLE_DE_PEDIDOS
             _alturaHeader = RelatorioTabela.MedirAlturaLinha(g, colW, _colHeaders,
                 FontHeader, PaddingCelula, AlturaHeaderTabela);
             _alturaLinhaTotal = MedirLinhaTotal(g, colW);
+            if (_temDesconto)
+            {
+                _alturaAviso = FontAviso.GetHeight(g) + 1f;
+                // Sentinela: a frase foi dimensionada para caber numa linha (ver FontAviso).
+                using var sfAviso = new StringFormat { FormatFlags = StringFormatFlags.NoWrap };
+                float larguraAviso = g.MeasureString(AvisoArredondamento, FontAviso,
+                    new SizeF(float.MaxValue, float.MaxValue), sfAviso).Width;
+                if (larguraAviso > area.Width)
+                    Logger.Warn($"Cópia de Pedido {_cab.Orcamento}: aviso de arredondamento mede {larguraAviso:F1} > largura útil {area.Width:F1}.");
+            }
 
             var sim = new EstadoPaginacao();
             int paginas = 0;
@@ -363,6 +390,12 @@ namespace CONTROLE_DE_PEDIDOS
             // === TABELA DE ITENS ===
             if (st.Item < _itens.Count)
             {
+                // Aviso de arredondamento no INÍCIO do grid: só no primeiro trecho (antes
+                // do 1º item, sempre página 1 pelo guard de ao menos 1 item por página);
+                // páginas de continuação não repetem.
+                if (_temDesconto && st.Item == 0)
+                    y = DesenharAviso(g, x, y, larguraTotal, medir) + GapAviso;
+
                 float tabelaTop = y;
                 if (!medir)
                 {
@@ -378,11 +411,11 @@ namespace CONTROLE_DE_PEDIDOS
                 while (st.Item < _itens.Count)
                 {
                     float alturaLinha = _alturasLinhas![st.Item];
-                    // Lookahead: o ÚLTIMO item precisa caber junto com o bloco de totais
-                    // (TOTAL + eventual VALOR NEGOCIADO), para ele nunca abrir página
-                    // sozinho (órfão).
+                    // Lookahead: o ÚLTIMO item precisa caber junto com o fechamento
+                    // (TOTAL + eventual VALOR NEGOCIADO + aviso de arredondamento), para
+                    // nada disso abrir página sozinho (órfão).
                     float alturaNecessaria = alturaLinha
-                        + (st.Item == _itens.Count - 1 ? AlturaBlocoTotais : 0f);
+                        + (st.Item == _itens.Count - 1 ? AlturaFechamento : 0f);
                     // Sempre ao menos UMA linha por página: sem isso, área degenerada
                     // deixaria HasMorePages=true para sempre (job infinito).
                     if (y + alturaNecessaria > limiteY && itensNestaPagina > 0)
@@ -419,6 +452,10 @@ namespace CONTROLE_DE_PEDIDOS
                 if (st.Item >= _itens.Count && !st.TotalOk)
                 {
                     y = DesenharLinhaTotal(g, penBorda, colW, x, y, larguraTotal, medir);
+                    // Aviso de arredondamento no FIM do grid, colado no bloco de totais
+                    // (reservado em AlturaFechamento pelo lookahead).
+                    if (_temDesconto)
+                        y = DesenharAviso(g, x, y + GapAviso, larguraTotal, medir);
                     st.TotalOk = true;
                 }
             }
@@ -876,6 +913,27 @@ namespace CONTROLE_DE_PEDIDOS
             g.DrawString(valor, FontTotal, Brushes.Black,
                 new RectangleF(cx + PaddingCelula, yValor, larguraUtil, _alturaLinhaTotal - (yValor - y) - PadCampoTotal + 1f),
                 sfValor);
+        }
+
+        /// <summary>
+        /// Linha do aviso de arredondamento: à esquerda, na borda do grid, NoWrap e sem
+        /// reticências (a frase cabe por dimensionamento — ver FontAviso), altura pela
+        /// métrica da fonte. Cinza escuro: discreto, mas legível no papel.
+        /// </summary>
+        private float DesenharAviso(Graphics g, float x, float y, float larguraTotal, bool medir)
+        {
+            if (!medir)
+            {
+                using var sf = new StringFormat
+                {
+                    FormatFlags = StringFormatFlags.NoWrap,
+                    Trimming = StringTrimming.None
+                };
+                using var brush = new SolidBrush(Color.FromArgb(64, 64, 64));
+                g.DrawString(AvisoArredondamento, FontAviso, brush,
+                    new RectangleF(x, y, larguraTotal, _alturaAviso), sf);
+            }
+            return y + _alturaAviso;
         }
 
         private float DesenharRodapePedido(Graphics g, Pen penBorda, float x, float y, float larguraTotal, bool medir)
