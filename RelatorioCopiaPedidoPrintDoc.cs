@@ -191,18 +191,18 @@ namespace CONTROLE_DE_PEDIDOS
             StringAlignment.Far, StringAlignment.Far, StringAlignment.Far
         ];
 
-        // COM desconto (8 colunas), larguras úteis em retrato: VR. UNIT. C/ DESC. 15%
-        // (104) comporta "R$ 12.345,67 (12,5%)" (102) numa linha; VR. TOTAL 12% (81)
-        // comporta "R$ 1.234.567,89" (78); ORIGINAL 10% (66) comporta "R$ 14.109,34"
-        // (64, o original de 12.345,67 a 12,5%); QTD 8% (51) comporta "20.000,00" (49);
+        // COM desconto (8 colunas), larguras úteis em retrato: VR. UNIT. C/ DESC. 16%
+        // (111) comporta "R$ 12.345,67 (12,55%)" (108) numa linha; VR. TOTAL 12% (81)
+        // comporta "R$ 1.234.567,89" (78); ORIGINAL 10% (66) comporta "R$ 14.117,40"
+        // (64, o original de 12.345,67 a 12,55%); QTD 8% (51) comporta "20.000,00" (49);
         // MATRÍCULA 10% e REFERÊNCIA 10,5% comportam os próprios cabeçalhos sem partir a
         // palavra; MARCA 11% (74) comporta as marcas de uma palavra só do cadastro
-        // ("VEDAMOTORS", "PANTANEIRO"). A DESCRIÇÃO (23,5%) é quem cede — quebra em mais
+        // ("VEDAMOTORS", "PANTANEIRO"). A DESCRIÇÃO (22,5%) é quem cede — quebra em mais
         // linhas, todas medidas. Os cabeçalhos longos quebram em 2 linhas ("VR. UNIT." /
         // "ORIGINAL"), com a altura do header medida. Na linha TOTAL, SEM DESCONTO ocupa
-        // QTD+ORIGINAL (18%) e COM DESCONTO ocupa C/ DESC.+TOTAL (27%) — largura para
-        // valor + % em 8,5pt ("R$ 1.234.567,89 (12,5%)" = 133).
-        private static readonly float[] ColPercentDesconto = [10f, 23.5f, 11f, 10.5f, 8f, 10f, 15f, 12f];
+        // QTD+ORIGINAL (18%) e COM DESCONTO ocupa C/ DESC.+TOTAL (28%, útil 201) — largura
+        // para valor + % em 8,5pt ("R$ 1.234.567,89 (12,55%)" = 140).
+        private static readonly float[] ColPercentDesconto = [10f, 22.5f, 11f, 10.5f, 8f, 10f, 16f, 12f];
         private static readonly string[] ColHeadersDesconto =
             ["MATRÍCULA", "DESCRIÇÃO", "MARCA", "REFERÊNCIA", "QTD",
              "VR. UNIT. ORIGINAL", "VR. UNIT. C/ DESC.", "VR. TOTAL"];
@@ -489,15 +489,15 @@ namespace CONTROLE_DE_PEDIDOS
             item.VrOriginal > 0m ? item.VrOriginal : item.VrUnitario;
 
         /// <summary>
-        /// "3,0%" — (1 − praticado/original) × 100, uma casa, pt-BR. CALCULADA dos
+        /// "2,99%" — (1 − praticado/original) × 100, duas casas, pt-BR. CALCULADA dos
         /// valores impressos (nunca estior.perc_desconto), para fechar com o que o
         /// cliente lê. Só chamada quando TemDesconto; desconto ínfimo que arredonda
-        /// para zero sai "&lt;0,1%" em vez de um "(0,0%)" contraditório.
+        /// para zero sai "&lt;0,01%" em vez de um "(0,00%)" contraditório.
         /// </summary>
         private static string Percentual(decimal original, decimal praticado)
         {
-            decimal pct = Math.Round((1m - praticado / original) * 100m, 1, MidpointRounding.AwayFromZero);
-            return pct <= 0m ? "<0,1%" : pct.ToString("N1", PtBr) + "%";
+            decimal pct = Math.Round((1m - praticado / original) * 100m, 2, MidpointRounding.AwayFromZero);
+            return pct <= 0m ? "<0,01%" : pct.ToString("N2", PtBr) + "%";
         }
 
         /// <summary>
