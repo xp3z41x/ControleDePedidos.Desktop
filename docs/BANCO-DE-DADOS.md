@@ -68,6 +68,8 @@ Acesso via `ConsultarIntegraAsync` (sessão com `default_transaction_read_only=o
 | `texto01..texto04` | forma de pagamento / nº do pedido / volumes / peso (rótulos por convenção da empresa) |
 | `vr_total` | valor total do pedido (painel de detalhes) |
 | `vr_negociado` | abatimento interno (créditos etc.); ≠ 0 imprime a linha VALOR NEGOCIADO na Cópia |
+| `vr_prazo` | **não usado** — soma de `quantidade × estior.vr_prazo`, mas inclui itens depois cancelados (diverge em 3 de 3.832 orçamentos, medido em 2026-11-09). A Cópia soma o total original pelos itens ativos. |
+| `desconto_vista` | **não usado** — desconto à vista do cabeçalho; é o que separa `estior.vr_vista` de `estior.vr_prazo` |
 | `status_conferencia` | `'S'` = conferido pelo Integra (coluna CONFERIDO "OK"; bloqueia retorno manual) |
 | `data_inc`, `hora_inc` | data/hora da digitação (impressa nos relatórios; `hora_inc` é `varchar(5)` "HH:MM") |
 | `dt_emissao` | data comercial de emissão (só data; **não** usada nos relatórios — pode divergir da digitação) |
@@ -76,7 +78,19 @@ Fatos medidos em produção (filial 5, ago/2026): `data_inc`/`hora_inc` 100 % pr
 
 ### `estior` — itens do orçamento
 
-`filial + orcamento + item` · `matricula` · `descricao` (snapshot do momento da venda) · `quantidade` · `vr_unitario` (já líquido de desconto de item) · `vr_total` (= `quantidade × vr_unitario`, 0 divergências medidas em 5.000 itens) · `perc_desconto` (informativo) · `cancelado` (`'S'` = cancelado; a Cópia SEMPRE oculta; a Separação oculta por config).
+`filial + orcamento + item` · `matricula` · `descricao` (snapshot do momento da venda) · `quantidade` · `vr_unitario` (já líquido de desconto de item) · `vr_total` (= `quantidade × vr_unitario`, 0 divergências medidas em 5.000 itens) · `vr_prazo` (unitário ORIGINAL, ver abaixo) · `cancelado` (`'S'` = cancelado; a Cópia SEMPRE oculta; a Separação oculta por config).
+
+**Preços do item — qual coluna é qual** (medido em 2026-11-09, filial 5, orçamentos abr–nov/2026, 96.232 itens ativos):
+
+| Coluna | Significado | Uso no app |
+|---|---|---|
+| `vr_prazo` | Unitário **original**, antes do desconto — é o "Valor a Prazo" que o impresso do próprio Integra mostra. Nunca nulo/zero; nunca menor que `vr_unitario` (0 acréscimos); sempre 2 casas efetivas. Igual a `vr_unitario` = item sem desconto. | Cópia de Pedido: `CopiaPedidoItem.VrOriginal` (última coluna do SELECT de itens). Defensivo no código: 0 ou abaixo do unitário vira `vr_unitario` (item tratado como sem desconto). |
+| `vr_unitario` / `vr_total` | Unitário e total **já com desconto** (o que o cliente paga). | Cópia e Separação. |
+| `vr_vista` | `vr_prazo` menos o `estorc.desconto_vista` do cabeçalho (difere de `vr_prazo` em 611 itens). | **Não usar.** |
+| `vr_venda` | Preço de cadastro do produto no momento (difere de `vr_prazo` em ~6 % dos itens; 28 zeros; 727 casos abaixo de `vr_unitario`). | **Não usar.** |
+| `perc_desconto` | % de desconto **digitada** pelo vendedor. Diverge da % efetiva (calculada dos preços) por arredondamento em 208 itens; 31 itens têm % sem diferença alguma de preço. | **Não usar** — a % impressa na Cópia é calculada de `vr_prazo`/`vr_unitario`. |
+
+Conferência contra o impresso do Integra (2026-11-09, PDFs `EXEMPLO 1..3`): orçamentos 2522, 3807 e 3739 batem item a item em `vr_prazo`, `vr_unitario` e `vr_total`, e nos totais (Σ `quantidade × vr_prazo` / Σ `vr_total`): 2522 = 20.334,60 / 19.187,00 · 3807 = 1.024,45 / 987,22 · 3739 = 839,50 / 814,54. Orçamentos sem desconto (ex.: 3843–3845) têm `vr_prazo = vr_unitario` em todos os itens.
 
 ### `estsal` — saldos/estoque por filial
 

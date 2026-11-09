@@ -1820,7 +1820,8 @@ namespace CONTROLE_DE_PEDIDOS
                                    COALESCE(i.vr_unitario, 0) AS vr_unitario,
                                    COALESCE(i.vr_total, 0)    AS vr_total,
                                    COALESCE(s.marca, '')      AS marca,
-                                   COALESCE(s.referencia, '') AS referencia
+                                   COALESCE(s.referencia, '') AS referencia,
+                                   COALESCE(i.vr_prazo, i.vr_unitario, 0) AS vr_prazo
                             FROM estior i
                             LEFT JOIN estsal s ON s.filial = i.filial AND s.matricula = i.matricula
                             WHERE i.filial = @filial AND i.orcamento = @orc
@@ -1831,16 +1832,26 @@ namespace CONTROLE_DE_PEDIDOS
                         using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
                         while (await reader.ReadAsync().ConfigureAwait(false))
                         {
+                            decimal vrUnitario = reader.GetDecimal(4);
+                            // vr_prazo = unitário ORIGINAL (antes do desconto). Defensivo: na
+                            // filial 5 (nov/2026) nunca veio nulo/zero nem menor que vr_unitario,
+                            // mas se vier 0 ou abaixo do unitário (acréscimo/dado ruim) o item é
+                            // tratado como SEM desconto (VrOriginal = VrUnitario) — a Cópia nunca
+                            // imprime "original" menor que o preço pago nem % de desconto negativa.
+                            decimal vrOriginal = reader.GetDecimal(8);
+                            if (vrOriginal <= 0 || vrOriginal < vrUnitario)
+                                vrOriginal = vrUnitario;
                             itens.Add(new CopiaPedidoItem
                             {
                                 Item = Convert.ToInt32(reader.GetValue(0)),
                                 Matricula = reader.GetString(1),
                                 Descricao = reader.GetString(2),
                                 Quantidade = reader.GetDecimal(3),
-                                VrUnitario = reader.GetDecimal(4),
+                                VrUnitario = vrUnitario,
                                 VrTotal = reader.GetDecimal(5),
                                 Marca = reader.GetString(6),
-                                Referencia = reader.GetString(7)
+                                Referencia = reader.GetString(7),
+                                VrOriginal = vrOriginal
                             });
                         }
                     }
