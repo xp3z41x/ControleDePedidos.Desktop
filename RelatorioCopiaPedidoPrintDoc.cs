@@ -51,8 +51,14 @@ namespace CONTROLE_DE_PEDIDOS
         public string Marca { get; set; } = "";
         public string Referencia { get; set; } = "";
         public decimal Quantidade { get; set; }
+        /// <summary>estior.vr_unitario — unitário JÁ COM desconto (o que o cliente paga).</summary>
         public decimal VrUnitario { get; set; }
+        /// <summary>estior.vr_total — total do item JÁ COM desconto (= Quantidade × VrUnitario).</summary>
         public decimal VrTotal { get; set; }
+        /// <summary>estior.vr_prazo — unitário ORIGINAL, antes do desconto (o "Valor a Prazo"
+        /// do impresso do próprio Integra). Nunca menor que VrUnitario na filial 5 (nov/2026).
+        /// Igual a VrUnitario = item sem desconto.</summary>
+        public decimal VrOriginal { get; set; }
     }
 
     /// <summary>
@@ -95,6 +101,15 @@ namespace CONTROLE_DE_PEDIDOS
         private readonly EmpresaDados _empresa;
         private readonly decimal _somaItens;
         private readonly bool _temNegociado;
+        /// <summary>Algum item com VrOriginal > VrUnitario (em centavos). Liga a coluna
+        /// VR. UNIT. ORIGINAL, a % no unitário e o fechamento SEM/COM DESCONTO.
+        /// Falso = grid de 7 colunas, idêntico ao de antes do desconto.</summary>
+        private readonly bool _temDesconto;
+        /// <summary>Σ round2(Quantidade × original) — total "SEM DESCONTO".</summary>
+        private readonly decimal _somaOriginal;
+        private readonly float[] _colPercent;
+        private readonly string[] _colHeaders;
+        private readonly StringAlignment[] _colAlign;
 
         // Data/hora REGISTRADA NO INTEGRA (não o relógio da impressão) — ver _cab.DataPedido.
         private const string RotuloData = "Data:";
@@ -105,6 +120,13 @@ namespace CONTROLE_DE_PEDIDOS
         private PrintingHelper.GeometriaPagina? _geo;
         private int? _totalPaginas;
         private float[]? _alturasLinhas;
+        // Medidas pela métrica da fonte no Graphics do job (SimularPaginacao), antes de
+        // qualquer LayoutPagina — header com quebra e linha TOTAL de dois níveis.
+        private float _alturaHeader = AlturaHeaderTabela;
+        private float _alturaLinhaTotal = AlturaLinhaTotal;
+        /// <summary>Altura da linha do aviso de arredondamento (FontAviso.GetHeight);
+        /// 0 em pedido sem desconto — aí o layout é idêntico ao de sempre.</summary>
+        private float _alturaAviso;
         private EstadoPaginacao _estado = new();
 
         /// <summary>Posição da renderização entre páginas. Uma instância para o job real
@@ -126,6 +148,15 @@ namespace CONTROLE_DE_PEDIDOS
         private static readonly Font FontHeader = new("Segoe UI Semibold", 7.5f);
         private static readonly Font FontDados = new("Segoe UI", 7.5f);
         private static readonly Font FontTotal = new("Segoe UI Semibold", 8.5f);
+        // Aviso de arredondamento (só pedido COM desconto), uma linha acima do 1º trecho
+        // do grid e outra sob o bloco de totais. 7pt itálico medido no DC da impressora
+        // (COL-A4/LAG-A4/SDN-A4/ESCRITORIO): frase = 575 de largura, altura 12,9 —
+        // cabe numa linha só na largura útil de retrato (747) com ~23% de folga, logo
+        // também em paisagem (1089). Texto fixo, definido pelo dono: não editar.
+        private static readonly Font FontAviso = new("Segoe UI", 7f, FontStyle.Italic);
+        private const string AvisoArredondamento =
+            "A porcentagem de desconto pode ficar um pouco diferente da combinada em alguns casos, devido ao arredondamento dos centavos.";
+        private const float GapAviso = 3f;
 
         private const string FraseLegal =
             "NÃO É DOCUMENTO FISCAL - NÃO É VÁLIDO COMO RECIBO E COMO GARANTIA DE MERCADORIA - NÃO COMPROVA PAGAMENTO";
@@ -143,7 +174,13 @@ namespace CONTROLE_DE_PEDIDOS
         /// <summary>Bloco de fechamento do grid: linha TOTAL, mais a linha VALOR
         /// NEGOCIADO quando existir. Usado também no lookahead da paginação — as duas
         /// linhas nunca se separam do último item.</summary>
-        private float AlturaBlocoTotais => AlturaLinhaTotal * (_temNegociado ? 2f : 1f);
+        private float AlturaBlocoTotais => _alturaLinhaTotal + (_temNegociado ? AlturaLinhaTotal : 0f);
+        /// <summary>Tudo que fecha o grid e precisa sair na página do último item:
+        /// bloco de totais + aviso de arredondamento (só com desconto). É o que o
+        /// lookahead reserva — o aviso nunca fica órfão em outra página.</summary>
+        private float AlturaFechamento => AlturaBlocoTotais + (_temDesconto ? GapAviso + _alturaAviso : 0f);
+        // Campo SEM/COM DESCONTO da linha TOTAL: rótulo pequeno em cima, valor embaixo.
+        private const float PadCampoTotal = 3f;
         private const float AlturaRodape = 50f;
         private const float AlturaFaixaPagina = 16f;   // reserva no pé p/ "Página X de Y"
         // Slot da logomarca: aspecto ~2,38 da ARTE RECORTADA (Resources/logo-distribuidora.png
@@ -151,15 +188,44 @@ namespace CONTROLE_DE_PEDIDOS
         private const float LogoSlotW = 238f;
         private const float LogoSlotH = 100f;
 
-        // Proporções das colunas (soma = 100%). VR. UNITÁRIO/TOTAL com 12%:
-        // comportam "1.234.567,89"; QTD 9% comporta "20.000,00".
-        private static readonly float[] ColPercent = [10f, 33f, 12f, 12f, 9f, 12f, 12f];
-        private static readonly string[] ColHeaders =
+        // Proporções das colunas (soma = 100%), dimensionadas pelo pior caso em RETRATO
+        // (área útil 747 = A4 − margens 40; paisagem só sobra). Larguras medidas no DC
+        // da impressora (Brother, ~4% mais largo que um bitmap de tela) contra a largura
+        // útil que MedirAlturaLinha usa: floor(colW − 2×padding). Valores em dinheiro
+        // saem com "R$" (Dinheiro(), C2 pt-BR).
+        //
+        // SEM desconto (7 colunas): VR. TOTAL 14% (útil 96) comporta "R$ 1.234.567,89"
+        // na fonte da linha TOTAL/VALOR NEGOCIADO (8,5pt, 90); VR. UNITÁRIO 11% (74)
+        // comporta o cabeçalho (72) e unitários até "R$ 123.456,78" (~69); QTD 9%
+        // comporta "20.000,00" (49).
+        private static readonly float[] ColPercentSimples = [10f, 32f, 12f, 12f, 9f, 11f, 14f];
+        private static readonly string[] ColHeadersSimples =
             ["MATRÍCULA", "DESCRIÇÃO", "MARCA", "REFERÊNCIA", "QTD", "VR. UNITÁRIO", "VR. TOTAL"];
-        private static readonly StringAlignment[] ColAlign =
+        private static readonly StringAlignment[] ColAlignSimples =
         [
             StringAlignment.Near, StringAlignment.Near, StringAlignment.Near, StringAlignment.Near,
             StringAlignment.Far, StringAlignment.Far, StringAlignment.Far
+        ];
+
+        // COM desconto (8 colunas), larguras úteis em retrato: VR. UNIT. C/ DESC. 16%
+        // (111) comporta "R$ 12.345,67 (12,55%)" (108) numa linha; VR. TOTAL 12% (81)
+        // comporta "R$ 1.234.567,89" (78); ORIGINAL 10% (66) comporta "R$ 14.117,40"
+        // (64, o original de 12.345,67 a 12,55%); QTD 8% (51) comporta "20.000,00" (49);
+        // MATRÍCULA 10% e REFERÊNCIA 10,5% comportam os próprios cabeçalhos sem partir a
+        // palavra; MARCA 11% (74) comporta as marcas de uma palavra só do cadastro
+        // ("VEDAMOTORS", "PANTANEIRO"). A DESCRIÇÃO (22,5%) é quem cede — quebra em mais
+        // linhas, todas medidas. Os cabeçalhos longos quebram em 2 linhas ("VR. UNIT." /
+        // "ORIGINAL"), com a altura do header medida. Na linha TOTAL, SEM DESCONTO ocupa
+        // QTD+ORIGINAL (18%) e COM DESCONTO ocupa C/ DESC.+TOTAL (28%, útil 201) — largura
+        // para valor + % em 8,5pt ("R$ 1.234.567,89 (12,55%)" = 140).
+        private static readonly float[] ColPercentDesconto = [10f, 22.5f, 11f, 10.5f, 8f, 10f, 16f, 12f];
+        private static readonly string[] ColHeadersDesconto =
+            ["MATRÍCULA", "DESCRIÇÃO", "MARCA", "REFERÊNCIA", "QTD",
+             "VR. UNIT. ORIGINAL", "VR. UNIT. C/ DESC.", "VR. TOTAL"];
+        private static readonly StringAlignment[] ColAlignDesconto =
+        [
+            StringAlignment.Near, StringAlignment.Near, StringAlignment.Near, StringAlignment.Near,
+            StringAlignment.Far, StringAlignment.Far, StringAlignment.Far, StringAlignment.Far
         ];
 
         /// <summary>
@@ -198,6 +264,11 @@ namespace CONTROLE_DE_PEDIDOS
             _empresa = empresa;
             _somaItens = itens.Sum(i => i.VrTotal);
             _temNegociado = cab.VrNegociado != 0m;
+            _temDesconto = itens.Any(i => TemDesconto(OriginalEfetivo(i), i.VrUnitario));
+            _somaOriginal = itens.Sum(i => Centavos(i.Quantidade * OriginalEfetivo(i)));
+            _colPercent = _temDesconto ? ColPercentDesconto : ColPercentSimples;
+            _colHeaders = _temDesconto ? ColHeadersDesconto : ColHeadersSimples;
+            _colAlign = _temDesconto ? ColAlignDesconto : ColAlignSimples;
             // NÃO trocar para true: o ResetTransform em GeometriaPagina.PrepararPagina
             // anularia a compensação do controller (ver comentário na separação).
             OriginAtMargins = false;
@@ -213,6 +284,9 @@ namespace CONTROLE_DE_PEDIDOS
             _estado = new EstadoPaginacao();
             _totalPaginas = null;
             _alturasLinhas = null;
+            _alturaHeader = AlturaHeaderTabela;
+            _alturaLinhaTotal = AlturaLinhaTotal;
+            _alturaAviso = 0f;
             _preview = e.PrintAction == PrintAction.PrintToPreview;
             // Uma medição por JOB; OnBeginPrint roda depois do PrintDialog.
             _geo = PrintingHelper.GeometriaPagina.Medir(DefaultPageSettings);
@@ -255,6 +329,21 @@ namespace CONTROLE_DE_PEDIDOS
             for (int i = 0; i < _itens.Count; i++)
                 _alturasLinhas[i] = RelatorioTabela.MedirAlturaLinha(g, colW, ValoresItem(_itens[i]),
                     FontDados, PaddingCelula, AlturaLinhaMin);
+            // Header com quebra ("VR. UNIT." / "ORIGINAL"): altura medida, nunca menor
+            // que a de sempre — sem desconto os rótulos cabem numa linha e nada muda.
+            _alturaHeader = RelatorioTabela.MedirAlturaLinha(g, colW, _colHeaders,
+                FontHeader, PaddingCelula, AlturaHeaderTabela);
+            _alturaLinhaTotal = MedirLinhaTotal(g, colW);
+            if (_temDesconto)
+            {
+                _alturaAviso = FontAviso.GetHeight(g) + 1f;
+                // Sentinela: a frase foi dimensionada para caber numa linha (ver FontAviso).
+                using var sfAviso = new StringFormat { FormatFlags = StringFormatFlags.NoWrap };
+                float larguraAviso = g.MeasureString(AvisoArredondamento, FontAviso,
+                    new SizeF(float.MaxValue, float.MaxValue), sfAviso).Width;
+                if (larguraAviso > area.Width)
+                    Logger.Warn($"Cópia de Pedido {_cab.Orcamento}: aviso de arredondamento mede {larguraAviso:F1} > largura útil {area.Width:F1}.");
+            }
 
             var sim = new EstadoPaginacao();
             int paginas = 0;
@@ -301,14 +390,20 @@ namespace CONTROLE_DE_PEDIDOS
             // === TABELA DE ITENS ===
             if (st.Item < _itens.Count)
             {
+                // Aviso de arredondamento no INÍCIO do grid: só no primeiro trecho (antes
+                // do 1º item, sempre página 1 pelo guard de ao menos 1 item por página);
+                // páginas de continuação não repetem.
+                if (_temDesconto && st.Item == 0)
+                    y = DesenharAviso(g, x, y, larguraTotal, medir) + GapAviso;
+
                 float tabelaTop = y;
                 if (!medir)
                 {
                     g.DrawLine(penBorda, x, tabelaTop, x + larguraTotal, tabelaTop);
-                    RelatorioTabela.DrawRow(g, colW, ColHeaders, FontHeader, x, y,
-                        AlturaHeaderTabela, PaddingCelula, ColAlign, quebrarLinha: false);
+                    RelatorioTabela.DrawRow(g, colW, _colHeaders, FontHeader, x, y,
+                        _alturaHeader, PaddingCelula, _colAlign, quebrarLinha: true);
                 }
-                y += AlturaHeaderTabela;
+                y += _alturaHeader;
                 if (!medir) g.DrawLine(penBorda, x, y, x + larguraTotal, y);
                 y += 1;
 
@@ -316,11 +411,11 @@ namespace CONTROLE_DE_PEDIDOS
                 while (st.Item < _itens.Count)
                 {
                     float alturaLinha = _alturasLinhas![st.Item];
-                    // Lookahead: o ÚLTIMO item precisa caber junto com o bloco de totais
-                    // (TOTAL + eventual VALOR NEGOCIADO), para ele nunca abrir página
-                    // sozinho (órfão).
+                    // Lookahead: o ÚLTIMO item precisa caber junto com o fechamento
+                    // (TOTAL + eventual VALOR NEGOCIADO + aviso de arredondamento), para
+                    // nada disso abrir página sozinho (órfão).
                     float alturaNecessaria = alturaLinha
-                        + (st.Item == _itens.Count - 1 ? AlturaBlocoTotais : 0f);
+                        + (st.Item == _itens.Count - 1 ? AlturaFechamento : 0f);
                     // Sempre ao menos UMA linha por página: sem isso, área degenerada
                     // deixaria HasMorePages=true para sempre (job infinito).
                     if (y + alturaNecessaria > limiteY && itensNestaPagina > 0)
@@ -331,7 +426,7 @@ namespace CONTROLE_DE_PEDIDOS
                     if (!medir)
                     {
                         RelatorioTabela.DrawRow(g, colW, ValoresItem(_itens[st.Item]), FontDados,
-                            x, y, alturaLinha, PaddingCelula, ColAlign, quebrarLinha: true);
+                            x, y, alturaLinha, PaddingCelula, _colAlign, quebrarLinha: true);
                     }
                     y += alturaLinha;
                     if (!medir) g.DrawLine(penLinha, x, y, x + larguraTotal, y);
@@ -357,6 +452,10 @@ namespace CONTROLE_DE_PEDIDOS
                 if (st.Item >= _itens.Count && !st.TotalOk)
                 {
                     y = DesenharLinhaTotal(g, penBorda, colW, x, y, larguraTotal, medir);
+                    // Aviso de arredondamento no FIM do grid, colado no bloco de totais
+                    // (reservado em AlturaFechamento pelo lookahead).
+                    if (_temDesconto)
+                        y = DesenharAviso(g, x, y + GapAviso, larguraTotal, medir);
                     st.TotalOk = true;
                 }
             }
@@ -387,24 +486,92 @@ namespace CONTROLE_DE_PEDIDOS
             }
         }
 
-        private static float[] CalcularColunas(float larguraTotal)
+        private float[] CalcularColunas(float larguraTotal)
         {
-            var colW = new float[ColPercent.Length];
-            for (int i = 0; i < ColPercent.Length; i++)
-                colW[i] = larguraTotal * ColPercent[i] / 100f;
+            var colW = new float[_colPercent.Length];
+            for (int i = 0; i < _colPercent.Length; i++)
+                colW[i] = larguraTotal * _colPercent[i] / 100f;
             return colW;
         }
 
-        private static string[] ValoresItem(CopiaPedidoItem item) =>
-        [
-            item.Matricula,
-            item.Descricao,
-            item.Marca,
-            item.Referencia,
-            item.Quantidade.ToString("N2", PtBr),
-            item.VrUnitario.ToString("N2", PtBr),
-            item.VrTotal.ToString("N2", PtBr)
-        ];
+        private string[] ValoresItem(CopiaPedidoItem item)
+        {
+            string qtd = item.Quantidade.ToString("N2", PtBr);
+            if (!_temDesconto)
+                return [item.Matricula, item.Descricao, item.Marca, item.Referencia, qtd,
+                        Dinheiro(item.VrUnitario), Dinheiro(item.VrTotal)];
+
+            decimal original = OriginalEfetivo(item);
+            // % SÓ no unitário com desconto e só se houve desconto no item (nada de
+            // "(0,0%)"). Espaço comum antes do "(": se a coluna apertar, a % desce para
+            // a linha de baixo (altura medida em MedirAlturaLinha), nunca é truncada.
+            string unitario = Dinheiro(item.VrUnitario);
+            if (TemDesconto(original, item.VrUnitario))
+                unitario += $" ({Percentual(original, item.VrUnitario)})";
+            return [item.Matricula, item.Descricao, item.Marca, item.Referencia, qtd,
+                    Dinheiro(original), unitario, Dinheiro(item.VrTotal)];
+        }
+
+        // ===== Desconto =====
+
+        private static decimal Centavos(decimal v) => Math.Round(v, 2, MidpointRounding.AwayFromZero);
+
+        /// <summary>Desconto = original maior que o praticado, comparando em centavos.</summary>
+        private static bool TemDesconto(decimal original, decimal praticado) =>
+            Centavos(original) > Centavos(praticado);
+
+        /// <summary>Unitário original; VrOriginal ausente (≤ 0) vale como "sem desconto"
+        /// — nunca imprime "R$ 0,00" de original nem inventa desconto de 100%.</summary>
+        private static decimal OriginalEfetivo(CopiaPedidoItem item) =>
+            item.VrOriginal > 0m ? item.VrOriginal : item.VrUnitario;
+
+        /// <summary>
+        /// "2,99%" — (1 − praticado/original) × 100, duas casas, pt-BR. CALCULADA dos
+        /// valores impressos (nunca estior.perc_desconto), para fechar com o que o
+        /// cliente lê. Só chamada quando TemDesconto; desconto ínfimo que arredonda
+        /// para zero sai "&lt;0,01%" em vez de um "(0,00%)" contraditório.
+        /// </summary>
+        private static string Percentual(decimal original, decimal praticado)
+        {
+            decimal pct = Math.Round((1m - praticado / original) * 100m, 2, MidpointRounding.AwayFromZero);
+            return pct <= 0m ? "<0,01%" : pct.ToString("N2", PtBr) + "%";
+        }
+
+        /// <summary>
+        /// "R$ 1.234,56" (C2 pt-BR) com espaço NÃO separável entre "R$" e o número: a
+        /// quebra de linha das células nunca deixa o "R$" sozinho numa linha.
+        /// </summary>
+        private static string Dinheiro(decimal v) =>
+            v.ToString("C2", PtBr).Replace(' ', ' ');
+
+        private string TextoTotalComDesconto() =>
+            TemDesconto(_somaOriginal, _somaItens)
+                ? $"{Dinheiro(_somaItens)} ({Percentual(_somaOriginal, _somaItens)})"
+                : Dinheiro(_somaItens);
+
+        /// <summary>Primeira coluna do campo de valor da linha TOTAL/VALOR NEGOCIADO:
+        /// a última coluna (sem desconto) ou C/ DESC.+TOTAL (com desconto).</summary>
+        private int ColunaValorTotal(float[] colW) => _temDesconto ? colW.Length - 2 : colW.Length - 1;
+
+        /// <summary>Primeira coluna do campo SEM DESCONTO (QTD+ORIGINAL).</summary>
+        private static int ColunaSemDesconto(float[] colW) => colW.Length - 4;
+
+        /// <summary>
+        /// Altura da linha TOTAL. Sem desconto: a constante de sempre. Com desconto:
+        /// rótulo do campo + valor (com quebra, até 2 linhas) pela métrica da fonte.
+        /// Roda só na simulação; o desenho reusa _alturaLinhaTotal.
+        /// </summary>
+        private float MedirLinhaTotal(Graphics g, float[] colW)
+        {
+            if (!_temDesconto) return AlturaLinhaTotal;
+            int colSem = ColunaSemDesconto(colW), colCom = ColunaValorTotal(colW);
+            float largSem = colW.Skip(colSem).Take(colCom - colSem).Sum() - PaddingCelula * 2f;
+            float largCom = colW.Skip(colCom).Sum() - PaddingCelula * 2f;
+            float hValor = Math.Max(MedirTexto(g, Dinheiro(_somaOriginal), FontTotal, largSem, 2),
+                                    MedirTexto(g, TextoTotalComDesconto(), FontTotal, largCom, 2));
+            float hRotulo = FontHeader.GetHeight(g) + 1f;
+            return Math.Max(AlturaLinhaTotal, PadCampoTotal + hRotulo + hValor + PadCampoTotal);
+        }
 
         /// <summary>
         /// Altura para desenhar o texto com quebra, entre 1 e maxLinhas linhas
@@ -672,12 +839,17 @@ namespace CONTROLE_DE_PEDIDOS
         {
             if (!medir)
             {
-                float larguraRotulo = colW.Take(colW.Length - 1).Sum();
+                // Campo de valor: última coluna (sem desconto) ou C/ DESC.+TOTAL (com
+                // desconto — o COM DESCONTO carrega a % e precisa da largura extra).
+                // VALOR NEGOCIADO usa o mesmo campo, alinhado sob o total pago.
+                int colValor = ColunaValorTotal(colW);
+                float xValor = x + colW.Take(colValor).Sum();
+                float larguraValor = x + larguraTotal - xValor;
                 float alturaBloco = AlturaBlocoTotais;
                 using var bg = new SolidBrush(Color.FromArgb(232, 232, 232));
                 g.FillRectangle(bg, x, y, larguraTotal, alturaBloco);
                 g.DrawRectangle(penBorda, x, y, larguraTotal, alturaBloco);
-                g.DrawLine(penBorda, x + larguraRotulo, y, x + larguraRotulo, y + alturaBloco);
+                g.DrawLine(penBorda, xValor, y, xValor, y + alturaBloco);
 
                 using var sf = new StringFormat
                 {
@@ -686,24 +858,82 @@ namespace CONTROLE_DE_PEDIDOS
                     Trimming = StringTrimming.EllipsisCharacter,
                     FormatFlags = StringFormatFlags.NoWrap
                 };
-                g.DrawString($"TOTAL ({_itens.Count} {(_itens.Count == 1 ? "item" : "itens")})",
-                    FontTotal, Brushes.Black,
-                    new RectangleF(x + PaddingCelula, y, larguraRotulo - PaddingCelula * 2f, AlturaLinhaTotal), sf);
-                g.DrawString(_somaItens.ToString("C2", PtBr), FontTotal, Brushes.Black,
-                    new RectangleF(x + larguraRotulo + PaddingCelula, y, colW[^1] - PaddingCelula * 2f, AlturaLinhaTotal), sf);
+                string rotuloTotal = $"TOTAL ({_itens.Count} {(_itens.Count == 1 ? "item" : "itens")})";
+
+                if (_temDesconto)
+                {
+                    float xSem = x + colW.Take(ColunaSemDesconto(colW)).Sum();
+                    g.DrawLine(penBorda, xSem, y, xSem, y + _alturaLinhaTotal);
+                    g.DrawString(rotuloTotal, FontTotal, Brushes.Black,
+                        new RectangleF(x + PaddingCelula, y, xSem - x - PaddingCelula * 2f, _alturaLinhaTotal), sf);
+                    DesenharCampoTotal(g, "SEM DESCONTO", Dinheiro(_somaOriginal), xSem, y, xValor - xSem);
+                    DesenharCampoTotal(g, "COM DESCONTO", TextoTotalComDesconto(), xValor, y, larguraValor);
+                }
+                else
+                {
+                    g.DrawString(rotuloTotal, FontTotal, Brushes.Black,
+                        new RectangleF(x + PaddingCelula, y, xValor - x - PaddingCelula * 2f, _alturaLinhaTotal), sf);
+                    g.DrawString(Dinheiro(_somaItens), FontTotal, Brushes.Black,
+                        new RectangleF(xValor + PaddingCelula, y, larguraValor - PaddingCelula * 2f, _alturaLinhaTotal), sf);
+                }
 
                 if (_temNegociado)
                 {
                     // Abatimento interno de créditos etc. — só aparece quando ≠ 0.
-                    float yNeg = y + AlturaLinhaTotal;
+                    float yNeg = y + _alturaLinhaTotal;
                     g.DrawLine(penBorda, x, yNeg, x + larguraTotal, yNeg);
                     g.DrawString("VALOR NEGOCIADO", FontTotal, Brushes.Black,
-                        new RectangleF(x + PaddingCelula, yNeg, larguraRotulo - PaddingCelula * 2f, AlturaLinhaTotal), sf);
-                    g.DrawString(_cab.VrNegociado.ToString("C2", PtBr), FontTotal, Brushes.Black,
-                        new RectangleF(x + larguraRotulo + PaddingCelula, yNeg, colW[^1] - PaddingCelula * 2f, AlturaLinhaTotal), sf);
+                        new RectangleF(x + PaddingCelula, yNeg, xValor - x - PaddingCelula * 2f, AlturaLinhaTotal), sf);
+                    g.DrawString(Dinheiro(_cab.VrNegociado), FontTotal, Brushes.Black,
+                        new RectangleF(xValor + PaddingCelula, yNeg, larguraValor - PaddingCelula * 2f, AlturaLinhaTotal), sf);
                 }
             }
             return y + AlturaBlocoTotais;
+        }
+
+        /// <summary>
+        /// Campo SEM/COM DESCONTO da linha TOTAL: rótulo pequeno no topo e o valor logo
+        /// abaixo, ambos à direita (alinhados às colunas de valor do grid). O valor quebra
+        /// se preciso — a altura já foi medida em MedirLinhaTotal, nada é truncado.
+        /// </summary>
+        private void DesenharCampoTotal(Graphics g, string rotulo, string valor, float cx, float y, float largura)
+        {
+            float hRotulo = FontHeader.GetHeight(g) + 1f;
+            float larguraUtil = largura - PaddingCelula * 2f;
+            using var sfRotulo = new StringFormat
+            {
+                Alignment = StringAlignment.Far,
+                Trimming = StringTrimming.EllipsisCharacter,
+                FormatFlags = StringFormatFlags.NoWrap
+            };
+            g.DrawString(rotulo, FontHeader, Brushes.Black,
+                new RectangleF(cx + PaddingCelula, y + PadCampoTotal, larguraUtil, hRotulo), sfRotulo);
+            using var sfValor = new StringFormat { Alignment = StringAlignment.Far };
+            float yValor = y + PadCampoTotal + hRotulo;
+            g.DrawString(valor, FontTotal, Brushes.Black,
+                new RectangleF(cx + PaddingCelula, yValor, larguraUtil, _alturaLinhaTotal - (yValor - y) - PadCampoTotal + 1f),
+                sfValor);
+        }
+
+        /// <summary>
+        /// Linha do aviso de arredondamento: à esquerda, na borda do grid, NoWrap e sem
+        /// reticências (a frase cabe por dimensionamento — ver FontAviso), altura pela
+        /// métrica da fonte. Cinza escuro: discreto, mas legível no papel.
+        /// </summary>
+        private float DesenharAviso(Graphics g, float x, float y, float larguraTotal, bool medir)
+        {
+            if (!medir)
+            {
+                using var sf = new StringFormat
+                {
+                    FormatFlags = StringFormatFlags.NoWrap,
+                    Trimming = StringTrimming.None
+                };
+                using var brush = new SolidBrush(Color.FromArgb(64, 64, 64));
+                g.DrawString(AvisoArredondamento, FontAviso, brush,
+                    new RectangleF(x, y, larguraTotal, _alturaAviso), sf);
+            }
+            return y + _alturaAviso;
         }
 
         private float DesenharRodapePedido(Graphics g, Pen penBorda, float x, float y, float larguraTotal, bool medir)
