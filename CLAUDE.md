@@ -30,6 +30,19 @@ Logs de execução: `%LocalAppData%\CONTROLE DE PEDIDOS\logs\app.log` (rotativo,
 - **Impressão** — subsistema próprio com contrato de geometria (preview vs impressora real têm origens diferentes). **Leia `docs/IMPRESSAO.md` antes de tocar em `*PrintDoc.cs` ou `PrintingHelper.cs`.**
 - **Config** — INI plano em `BaseDirectory\config.ini` (por máquina). Chaves precisam ser **globalmente únicas** (o parser ignora seções); nova chave = propriedade + linha no `Salvar()` + `case` no `Carregar()` + campo no `ConfigDialog` + atribuição no `AplicarConfig()`.
 
+## ⛔ PROIBIDO: imprimir em impressora física durante desenvolvimento/testes
+
+**Incidente de 11/11/2026:** harnesses de teste mandaram centenas de jobs da Cópia de Pedido para impressoras físicas (`DISTRIBUIDORA`, `SDN-A4`, `ESCRITORIO`…), confiando em `PrinterSettings.PrintToFile = true` + `PrintFileName` para "desviar para .prn". **Dezenas de folhas foram impressas de verdade.** Nesta máquina (servidor RDS) TODAS as impressoras físicas são conexões remotas (`\\TS-*\...`, `\\SDN-IMP\...`, IP) e o desvio para arquivo **não é garantido** — o job pode chegar ao papel. Regras, sem exceção, para humanos, Claude e sub-sessões:
+
+- **Nunca** chamar `doc.Print()`, `ImprimirDocumento`, `PrintDialog` → OK, nem botão "Imprimir" do app (preview ou grid) com destino a impressora física — nem com `PrintToFile`, nem "só um teste", nem em "uma página". A impressora padrão do Windows (hoje `DISTRIBUIDORA`) é física: **nunca deixe o destino no padrão**.
+- **Permitido apenas:**
+  1. `PreviewPrintController` (não passa pelo spooler) — é o modo de verificação principal; PNGs via `PreviewPageInfo.Image`.
+  2. Modo REAL (`StandardPrintController`) **somente** com `PrinterSettings.PrinterName = "Microsoft Print to PDF"` (driver local, porta `PORTPROMPT:`) + `PrintToFile = true` + `PrintFileName` no scratchpad. O harness **deve ter guard que lança exceção antes do `Print()`** se `PrinterName` for qualquer outra coisa:
+     `if (doc.PrinterSettings.PrinterName != "Microsoft Print to PDF") throw new InvalidOperationException("Impressora física proibida em teste");`
+  3. Geometria de impressora física (margens físicas, DPI): **só consulta**, sem job — `PrinterSettings.DefaultPageSettings.HardMarginX/Y`, `PrintableArea`, `PrinterSettings.CreateMeasurementGraphics()`. Consultar não imprime; `Print()` imprime.
+- Validação em papel é feita **pelo usuário**, a pedido dele. Ao reportar, diga "não testado em papel" — nunca "nada foi impresso" sem ter verificado.
+- Ao delegar a sub-sessões qualquer trabalho de impressão, **copie estas regras no brief**.
+
 ## Invariantes críticos (quebrar = incidente)
 
 1. **`integrapgsql` é PRODUÇÃO e somente leitura.** Três camadas garantem (connection string `default_transaction_read_only=on`, wrapper `IntegraReadOnlyConnection`, convenção). Única exceção: `AtualizarObservacaoEstmovAsync` — não adicione consumidores de `ConnectionStringIntegraEscrita`. Para explorar o banco em desenvolvimento: `$env:PGOPTIONS='-c default_transaction_read_only=on'` no psql, sempre.
@@ -45,7 +58,7 @@ Logs de execução: `%LocalAppData%\CONTROLE DE PEDIDOS\logs\app.log` (rotativo,
 
 ## Como verificar (sem papel, sem tocar produção)
 
-- **Impressão**: preview exercita o modo PREVIEW; PrintDialog com "Imprimir em arquivo" (`.prn`) exercita o modo REAL sem gastar folha. Conferir no log as linhas `LogarPagina` com `DENTRO_DA_AREA_IMPRIMIVEL=True` nos dois modos e contagens de página idênticas (o Warn "simulação previu X, renderizou Y" indica bug de paginação). Padrão de harness: console app `net10.0-windows` no scratchpad que inclui via `<Compile Include>` os fontes de impressão (`Code128.cs`, `Logger.cs`, `AppConfig.cs`, `PrintingHelper.cs`, `Relatorio*PrintDoc.cs`) + o `EmbeddedResource` do logo, renderiza cenários sintéticos com `PreviewPrintController` e `StandardPrintController+PrintToFile`, compara contagens e exporta PNGs das páginas (via `PreviewPageInfo.Image`) para inspeção visual.
+- **Impressão** (leia antes a seção **⛔ PROIBIDO** acima): preview exercita o modo PREVIEW; o modo REAL só com "Microsoft Print to PDF" + `PrintToFile` para o scratchpad e guard de impressora no harness — **jamais** "Imprimir em arquivo" numa impressora física. Conferir no log as linhas `LogarPagina` com `DENTRO_DA_AREA_IMPRIMIVEL=True` nos dois modos e contagens de página idênticas (o Warn "simulação previu X, renderizou Y" indica bug de paginação). Padrão de harness: console app `net10.0-windows` no scratchpad que inclui via `<Compile Include>` os fontes de impressão (`Code128.cs`, `Logger.cs`, `AppConfig.cs`, `PrintingHelper.cs`, `Relatorio*PrintDoc.cs`) + o `EmbeddedResource` do logo, renderiza cenários sintéticos com `PreviewPrintController` e `StandardPrintController+PrintToFile` **exclusivamente na "Microsoft Print to PDF"** (com o guard que lança se `PrinterName` for outra), compara contagens e exporta PNGs das páginas (via `PreviewPageInfo.Image`) para inspeção visual.
 - **GUI**: rodar o EXE de Debug (o `config.ini` do bin aponta para os bancos locais) e capturar via `PrintWindow`/`CopyFromScreen`. Cliques via `mouse_event` funcionam; **SendKeys de teclas modificadas (Ctrl+X, Esc) NÃO atravessa a camada RDP** — valide atalhos apenas visualmente (rótulo no menu) e peça teste físico ao usuário.
 - **Banco**: consultas exploratórias sempre com `PGOPTIONS='-c default_transaction_read_only=on'`. Abrir preview de relatório é livre de efeitos (o avanço de status só dispara em impressão física).
 - Selecionar linhas/abrir telas no app rodando é seguro; **não** clicar Avançar/Retornar/Travar/Controlar/Ignorar/Excluir em dados reais durante testes.
