@@ -206,8 +206,10 @@ namespace CONTROLE_DE_PEDIDOS
         // comporta o cabeçalho (72) e unitários até "R$ 123.456,78" (~69); QTD 9%
         // comporta "20.000,00" (49).
         private static readonly float[] ColPercentSimples = [10f, 32f, 12f, 12f, 9f, 11f, 14f];
+        // Rótulos curtos: o header cabe numa linha só e as colunas estreitas deixam de
+        // ser dimensionadas pelo próprio rótulo ("MATRÍCULA", "VR. UNIT. C/ DESC.").
         private static readonly string[] ColHeadersSimples =
-            ["MATRÍCULA", "DESCRIÇÃO", "MARCA", "REFERÊNCIA", "QTD", "VR. UNITÁRIO", "VR. TOTAL"];
+            ["MAT.", "DESCRIÇÃO", "MARCA", "REFERÊNCIA", "QTD", "UNITÁRIO", "TOTAL"];
         private static readonly StringAlignment[] ColAlignSimples =
         [
             StringAlignment.Near, StringAlignment.Near, StringAlignment.Near, StringAlignment.Near,
@@ -227,8 +229,8 @@ namespace CONTROLE_DE_PEDIDOS
         // para valor + % em 8,5pt ("R$ 1.234.567,89 (12,55%)" = 140).
         private static readonly float[] ColPercentDesconto = [10f, 22.5f, 11f, 10.5f, 8f, 10f, 16f, 12f];
         private static readonly string[] ColHeadersDesconto =
-            ["MATRÍCULA", "DESCRIÇÃO", "MARCA", "REFERÊNCIA", "QTD",
-             "VR. UNIT. ORIGINAL", "VR. UNIT. C/ DESC.", "VR. TOTAL"];
+            ["MAT.", "DESCRIÇÃO", "MARCA", "REFERÊNCIA", "QTD",
+             "UNITÁRIO", "C/ DESC.", "TOTAL"];
         private static readonly StringAlignment[] ColAlignDesconto =
         [
             StringAlignment.Near, StringAlignment.Near, StringAlignment.Near, StringAlignment.Near,
@@ -337,8 +339,8 @@ namespace CONTROLE_DE_PEDIDOS
             for (int i = 0; i < _itens.Count; i++)
                 _alturasLinhas[i] = RelatorioTabela.MedirAlturaLinha(g, colW, ValoresItem(_itens[i]),
                     FontDados, PaddingCelula, AlturaLinhaMin);
-            // Header com quebra ("VR. UNIT." / "ORIGINAL"): altura medida, nunca menor
-            // que a de sempre — sem desconto os rótulos cabem numa linha e nada muda.
+            // Rótulos curtos cabem numa linha; a altura continua medida como rede de
+            // segurança (coluna apertada quebra o rótulo e o header engorda, nunca corta).
             _alturaHeader = RelatorioTabela.MedirAlturaLinha(g, colW, _colHeaders,
                 FontHeader, PaddingCelula, AlturaHeaderTabela);
             _alturaLinhaTotal = MedirLinhaTotal(g, colW);
