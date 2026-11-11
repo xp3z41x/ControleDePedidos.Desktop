@@ -202,8 +202,18 @@ namespace CONTROLE_DE_PEDIDOS
         // as colunas de valor/código reservavam espaço que quase nenhum pedido usa e a
         // DESCRIÇÃO (22,5% com desconto) quebrava em quase todo item. Agora cada job
         // mede o PRÓPRIO pedido (CalcularColunas, chamada uma vez em SimularPaginacao,
-        // com o Graphics do job — DC da impressora) e o array _colW vale para a
-        // simulação e para o desenho: deriva impossível por construção.
+        // antes de qualquer altura) e o array _colW vale para a simulação e para o
+        // desenho: deriva impossível por construção.
+        //
+        // As LARGURAS são medidas num Graphics de REFERÊNCIA fixo (BitmapReferencia),
+        // não no do job. Medidas no job, o preview (metafile) e a impressora divergiam
+        // em fração de unidade, o arredondamento de uma coluna de valor cruzava um
+        // inteiro (UNITÁRIO 65 × 66), a DESCRIÇÃO — que fica com a SOBRA — mudava 1
+        // unidade e um item que cabia "exato" quebrava só no papel: preview 1 página,
+        // impressão 2 (varredura de 26 itens em retrato). Nenhuma folga resolve isso,
+        // porque a sobra é que oscila. Com a referência, preview e impressão recebem
+        // EXATAMENTE as mesmas larguras para a mesma área — como nas proporções fixas —
+        // e só as ALTURAS seguem medidas no Graphics do job (contrato de sempre).
         //
         // Regra (W = largura útil da área):
         //  1. Colunas estreitas (MAT., QTD, valores): max(rótulo, maior valor do pedido),
@@ -245,14 +255,28 @@ namespace CONTROLE_DE_PEDIDOS
 
         // Posições fixas nos dois layouts (as colunas de valor vêm depois de QTD).
         private const int ColDescricao = 1, ColMarca = 2, ColReferencia = 3;
-        /// <summary>Folga sobre a largura medida. O preview mede no metafile e o job real
-        /// no DC da impressora; as larguras de cada job saem do próprio Graphics, mas a
-        /// folga garante que um texto que "cabe exato" num modo não quebre no outro —
-        /// mesma quebra, mesma paginação.</summary>
+        /// <summary>Folga sobre a largura medida na referência: cobre a diferença entre a
+        /// referência e o DC real de cada impressora/preview (medidas na Brother, HP e
+        /// Epson ficam bem abaixo de 5%), para as colunas estreitas nunca quebrarem
+        /// nem o valor da linha TOTAL (NoWrap) ganhar reticências.</summary>
         private const float FolgaMedida = 1.05f;
         private const float TetoMarca = 0.11f;       // ~82 em retrato: "MAGNET MARELLI" (máx. 14) quebra em 2
         private const float TetoReferencia = 0.13f;  // ~97 em retrato: p95 (15 caracteres) numa linha
         private const float PisoDescricao = 0.25f;
+
+        /// <summary>
+        /// Graphics de referência para medir LARGURAS de coluna: bitmap a 600 dpi (a
+        /// resolução das laser A4 do parque), medido em 1/100" — a unidade do job.
+        /// Independe do modo (preview × real) e da impressora — mesma área e mesmos
+        /// dados dão sempre as mesmas larguras. Criado por chamada (barato) para não
+        /// compartilhar Graphics entre threads.
+        /// </summary>
+        private static Bitmap BitmapReferencia()
+        {
+            var bmp = new Bitmap(1, 1);
+            bmp.SetResolution(600f, 600f);
+            return bmp;
+        }
 
         /// <summary>
         /// Logomarca embutida no EXE (Resources\logo-distribuidora.png). O MemoryStream
@@ -354,8 +378,9 @@ namespace CONTROLE_DE_PEDIDOS
         private void SimularPaginacao(Graphics g, RectangleF area)
         {
             // Larguras PRIMEIRO: todas as alturas abaixo (itens, header, TOTAL) dependem
-            // delas. Calculadas uma vez, no Graphics do job, e guardadas para o desenho.
-            float[] colW = _colW = CalcularColunas(g, area.Width);
+            // delas. Calculadas uma vez por job (no Graphics de REFERÊNCIA — ver
+            // BitmapReferencia) e guardadas para o desenho.
+            float[] colW = _colW = CalcularColunas(area.Width);
             _alturasLinhas = new float[_itens.Count];
             for (int i = 0; i < _itens.Count; i++)
                 _alturasLinhas[i] = RelatorioTabela.MedirAlturaLinha(g, colW, ValoresItem(_itens[i]),
@@ -521,11 +546,18 @@ namespace CONTROLE_DE_PEDIDOS
 
         /// <summary>
         /// Larguras das colunas deste pedido (regra completa no comentário de
-        /// ColHeadersSimples). Roda UMA vez por job, em SimularPaginacao, no Graphics do
-        /// job; soma = larguraTotal.
+        /// ColHeadersSimples). Roda UMA vez por job, em SimularPaginacao; mede no Graphics
+        /// de referência (nunca no do job: preview e papel teriam larguras diferentes).
+        /// Soma = larguraTotal.
         /// </summary>
-        private float[] CalcularColunas(Graphics g, float larguraTotal)
+        private float[] CalcularColunas(float larguraTotal)
         {
+            using var bmpRef = BitmapReferencia();
+            using var g = Graphics.FromImage(bmpRef);
+            // 1/100" explícito: num bitmap, GraphicsUnit.Display NÃO é 1/100" (só em
+            // impressora) — mediria tudo ~45% maior.
+            g.PageUnit = GraphicsUnit.Inch;
+            g.PageScale = 0.01f;
             int n = _colHeaders.Length;
             var w = new float[n];
             var linhas = _itens.Select(ValoresItem).ToList();
