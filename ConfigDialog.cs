@@ -17,6 +17,7 @@ namespace CONTROLE_DE_PEDIDOS
         private CheckBox chkSeparacaoCasasDecimais = null!;
         private CheckBox chkCopiaPaisagem = null!;
         private CheckBox chkCopiaOrdenarAlfabetica = null!;
+        private CheckBox chkCopiaPercentualDesconto = null!;
         private TextBox txtEmpresaRazao = null!;
         private TextBox txtEmpresaCnpj = null!;
         private TextBox txtEmpresaIE = null!;
@@ -171,6 +172,7 @@ namespace CONTROLE_DE_PEDIDOS
             y = AdicionarSecao(container, "CÓPIA DE PEDIDO", y, contentWidth);
             y = AdicionarCheckBox(container, "Imprimir em paisagem (padrão: retrato)", out chkCopiaPaisagem, Config.CopiaPaisagem, y);
             y = AdicionarCheckBox(container, "Ordenar itens alfabeticamente (padrão: ordem do pedido)", out chkCopiaOrdenarAlfabetica, Config.CopiaOrdenarAlfabetica, y);
+            y = AdicionarCheckBox(container, "Exibir porcentagem de desconto e aviso de arredondamento", out chkCopiaPercentualDesconto, Config.CopiaExibirPercentualDesconto, y);
 
             y += Dpi(10);
 
@@ -376,6 +378,7 @@ namespace CONTROLE_DE_PEDIDOS
             Config.SeparacaoCasasDecimais = chkSeparacaoCasasDecimais.Checked;
             Config.CopiaPaisagem = chkCopiaPaisagem.Checked;
             Config.CopiaOrdenarAlfabetica = chkCopiaOrdenarAlfabetica.Checked;
+            Config.CopiaExibirPercentualDesconto = chkCopiaPercentualDesconto.Checked;
             Config.EmpresaRazaoSocial = txtEmpresaRazao.Text.Trim();
             Config.EmpresaCnpj = txtEmpresaCnpj.Text.Trim();
             Config.EmpresaInscricaoEstadual = txtEmpresaIE.Text.Trim();

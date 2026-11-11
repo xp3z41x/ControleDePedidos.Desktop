@@ -107,6 +107,13 @@ namespace CONTROLE_DE_PEDIDOS
         private readonly bool _temDesconto;
         /// <summary>Σ round2(Quantidade × original) — total "SEM DESCONTO".</summary>
         private readonly decimal _somaOriginal;
+        /// <summary>Config CopiaExibirPercentualDesconto. Desligado: o grid COM desconto
+        /// continua (colunas ORIGINAL/C/ DESC., campos SEM/COM DESCONTO), mas só com os
+        /// valores em reais — sem "(x,xx%)" no unitário nem no total, e sem o aviso de
+        /// arredondamento (que só existe por causa da %).</summary>
+        private readonly bool _exibirPercentual;
+        /// <summary>Aviso de arredondamento: só com desconto E com a % visível.</summary>
+        private bool ExibeAviso => _temDesconto && _exibirPercentual;
         private readonly float[] _colPercent;
         private readonly string[] _colHeaders;
         private readonly StringAlignment[] _colAlign;
@@ -178,7 +185,7 @@ namespace CONTROLE_DE_PEDIDOS
         /// <summary>Tudo que fecha o grid e precisa sair na página do último item:
         /// bloco de totais + aviso de arredondamento (só com desconto). É o que o
         /// lookahead reserva — o aviso nunca fica órfão em outra página.</summary>
-        private float AlturaFechamento => AlturaBlocoTotais + (_temDesconto ? GapAviso + _alturaAviso : 0f);
+        private float AlturaFechamento => AlturaBlocoTotais + (ExibeAviso ? GapAviso + _alturaAviso : 0f);
         // Campo SEM/COM DESCONTO da linha TOTAL: rótulo pequeno em cima, valor embaixo.
         private const float PadCampoTotal = 3f;
         private const float AlturaRodape = 50f;
@@ -257,9 +264,10 @@ namespace CONTROLE_DE_PEDIDOS
         });
 
         public RelatorioCopiaPedidoPrintDoc(CopiaPedidoCabecalho cab, List<CopiaPedidoItem> itens,
-            EmpresaDados empresa, bool paisagem)
+            EmpresaDados empresa, bool paisagem, bool exibirPercentualDesconto = true)
         {
             _cab = cab;
+            _exibirPercentual = exibirPercentualDesconto;
             _itens = itens;
             _empresa = empresa;
             _somaItens = itens.Sum(i => i.VrTotal);
@@ -334,7 +342,7 @@ namespace CONTROLE_DE_PEDIDOS
             _alturaHeader = RelatorioTabela.MedirAlturaLinha(g, colW, _colHeaders,
                 FontHeader, PaddingCelula, AlturaHeaderTabela);
             _alturaLinhaTotal = MedirLinhaTotal(g, colW);
-            if (_temDesconto)
+            if (ExibeAviso)
             {
                 _alturaAviso = FontAviso.GetHeight(g) + 1f;
                 // Sentinela: a frase foi dimensionada para caber numa linha (ver FontAviso).
@@ -393,7 +401,7 @@ namespace CONTROLE_DE_PEDIDOS
                 // Aviso de arredondamento no INÍCIO do grid: só no primeiro trecho (antes
                 // do 1º item, sempre página 1 pelo guard de ao menos 1 item por página);
                 // páginas de continuação não repetem.
-                if (_temDesconto && st.Item == 0)
+                if (ExibeAviso && st.Item == 0)
                     y = DesenharAviso(g, x, y, larguraTotal, medir) + GapAviso;
 
                 float tabelaTop = y;
@@ -454,7 +462,7 @@ namespace CONTROLE_DE_PEDIDOS
                     y = DesenharLinhaTotal(g, penBorda, colW, x, y, larguraTotal, medir);
                     // Aviso de arredondamento no FIM do grid, colado no bloco de totais
                     // (reservado em AlturaFechamento pelo lookahead).
-                    if (_temDesconto)
+                    if (ExibeAviso)
                         y = DesenharAviso(g, x, y + GapAviso, larguraTotal, medir);
                     st.TotalOk = true;
                 }
@@ -506,7 +514,7 @@ namespace CONTROLE_DE_PEDIDOS
             // "(0,0%)"). Espaço comum antes do "(": se a coluna apertar, a % desce para
             // a linha de baixo (altura medida em MedirAlturaLinha), nunca é truncada.
             string unitario = Dinheiro(item.VrUnitario);
-            if (TemDesconto(original, item.VrUnitario))
+            if (_exibirPercentual && TemDesconto(original, item.VrUnitario))
                 unitario += $" ({Percentual(original, item.VrUnitario)})";
             return [item.Matricula, item.Descricao, item.Marca, item.Referencia, qtd,
                     Dinheiro(original), unitario, Dinheiro(item.VrTotal)];
@@ -545,7 +553,7 @@ namespace CONTROLE_DE_PEDIDOS
             v.ToString("C2", PtBr).Replace(' ', ' ');
 
         private string TextoTotalComDesconto() =>
-            TemDesconto(_somaOriginal, _somaItens)
+            _exibirPercentual && TemDesconto(_somaOriginal, _somaItens)
                 ? $"{Dinheiro(_somaItens)} ({Percentual(_somaOriginal, _somaItens)})"
                 : Dinheiro(_somaItens);
 

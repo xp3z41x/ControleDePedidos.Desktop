@@ -1879,7 +1879,7 @@ namespace CONTROLE_DE_PEDIDOS
 
                 // SEM wiring de ImpressaoRealConcluida: a Cópia de Pedido nunca altera status.
                 using var doc = new RelatorioCopiaPedidoPrintDoc(dados.cab, dados.itens,
-                    EmpresaDados.De(config), config.CopiaPaisagem);
+                    EmpresaDados.De(config), config.CopiaPaisagem, config.CopiaExibirPercentualDesconto);
 
                 Logger.Info($"Cópia de Pedido {orcamento}: DataPedido='{dados.cab.DataPedido}' (estorc.data_inc/hora_inc)");
                 PrintingHelper.LogarEstado(doc, "Cópia de Pedido");

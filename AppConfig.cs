@@ -19,6 +19,9 @@ namespace CONTROLE_DE_PEDIDOS
         public bool SeparacaoCasasDecimais { get; set; } = false;
         public bool CopiaPaisagem { get; set; } = false;
         public bool CopiaOrdenarAlfabetica { get; set; } = false;
+        /// <summary>Cópia de Pedido COM desconto: imprime a % (no unitário e no total) e o
+        /// aviso de arredondamento. Desligado = só os valores em reais.</summary>
+        public bool CopiaExibirPercentualDesconto { get; set; } = true;
 
         // Dados da empresa impressos no cabecalho da Copia de Pedido.
         // Texto livre; campo vazio e simplesmente omitido do relatorio.
@@ -99,6 +102,7 @@ namespace CONTROLE_DE_PEDIDOS
                 "[CopiaPedido]",
                 $"CopiaPaisagem={CopiaPaisagem}",
                 $"CopiaOrdenarAlfabetica={CopiaOrdenarAlfabetica}",
+                $"CopiaExibirPercentualDesconto={CopiaExibirPercentualDesconto}",
                 "",
                 "[Empresa]",
                 $"EmpresaRazaoSocial={EmpresaRazaoSocial}",
@@ -165,6 +169,7 @@ namespace CONTROLE_DE_PEDIDOS
                     case "SeparacaoCasasDecimais": if (bool.TryParse(value, out var sepDec)) config.SeparacaoCasasDecimais = sepDec; break;
                     case "CopiaPaisagem": if (bool.TryParse(value, out var copPais)) config.CopiaPaisagem = copPais; break;
                     case "CopiaOrdenarAlfabetica": if (bool.TryParse(value, out var copAlfa)) config.CopiaOrdenarAlfabetica = copAlfa; break;
+                    case "CopiaExibirPercentualDesconto": if (bool.TryParse(value, out var copPct)) config.CopiaExibirPercentualDesconto = copPct; break;
                     case "EmpresaRazaoSocial": config.EmpresaRazaoSocial = value; break;
                     case "EmpresaCnpj": config.EmpresaCnpj = value; break;
                     case "EmpresaInscricaoEstadual": config.EmpresaInscricaoEstadual = value; break;
