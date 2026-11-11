@@ -102,19 +102,18 @@ namespace CONTROLE_DE_PEDIDOS
         private readonly decimal _somaItens;
         private readonly bool _temNegociado;
         /// <summary>Algum item com VrOriginal > VrUnitario (em centavos). Liga a coluna
-        /// VR. UNIT. ORIGINAL, a % no unitário e o fechamento SEM/COM DESCONTO.
-        /// Falso = grid de 7 colunas, idêntico ao de antes do desconto.</summary>
+        /// C/ DESC. (UNITÁRIO passa a ser o original), a % e o fechamento SEM/COM DESCONTO.
+        /// Falso = grid de 7 colunas.</summary>
         private readonly bool _temDesconto;
         /// <summary>Σ round2(Quantidade × original) — total "SEM DESCONTO".</summary>
         private readonly decimal _somaOriginal;
         /// <summary>Config CopiaExibirPercentualDesconto. Desligado: o grid COM desconto
-        /// continua (colunas ORIGINAL/C/ DESC., campos SEM/COM DESCONTO), mas só com os
+        /// continua (colunas UNITÁRIO/C/ DESC., campos SEM/COM DESCONTO), mas só com os
         /// valores em reais — sem "(x,xx%)" no unitário nem no total, e sem o aviso de
         /// arredondamento (que só existe por causa da %).</summary>
         private readonly bool _exibirPercentual;
         /// <summary>Aviso de arredondamento: só com desconto E com a % visível.</summary>
         private bool ExibeAviso => _temDesconto && _exibirPercentual;
-        private readonly float[] _colPercent;
         private readonly string[] _colHeaders;
         private readonly StringAlignment[] _colAlign;
 
@@ -127,6 +126,9 @@ namespace CONTROLE_DE_PEDIDOS
         private PrintingHelper.GeometriaPagina? _geo;
         private int? _totalPaginas;
         private float[]? _alturasLinhas;
+        /// <summary>Larguras das colunas DESTE job (CalcularColunas, em SimularPaginacao
+        /// e antes de medir qualquer altura). Simulação e desenho usam o mesmo array.</summary>
+        private float[]? _colW;
         // Medidas pela métrica da fonte no Graphics do job (SimularPaginacao), antes de
         // qualquer LayoutPagina — header com quebra e linha TOTAL de dois níveis.
         private float _alturaHeader = AlturaHeaderTabela;
@@ -195,19 +197,31 @@ namespace CONTROLE_DE_PEDIDOS
         private const float LogoSlotW = 238f;
         private const float LogoSlotH = 100f;
 
-        // Proporções das colunas (soma = 100%), dimensionadas pelo pior caso em RETRATO
-        // (área útil 747 = A4 − margens 40; paisagem só sobra). Larguras medidas no DC
-        // da impressora (Brother, ~4% mais largo que um bitmap de tela) contra a largura
-        // útil que MedirAlturaLinha usa: floor(colW − 2×padding). Valores em dinheiro
-        // saem com "R$" (Dinheiro(), C2 pt-BR).
+        // ===== Larguras das colunas: AUTO-AJUSTE POR JOB =====
+        // Antes eram proporções fixas dimensionadas pelo pior caso de TODOS os pedidos:
+        // as colunas de valor/código reservavam espaço que quase nenhum pedido usa e a
+        // DESCRIÇÃO (22,5% com desconto) quebrava em quase todo item. Agora cada job
+        // mede o PRÓPRIO pedido (CalcularColunas, chamada uma vez em SimularPaginacao,
+        // com o Graphics do job — DC da impressora) e o array _colW vale para a
+        // simulação e para o desenho: deriva impossível por construção.
         //
-        // SEM desconto (7 colunas): VR. TOTAL 14% (útil 96) comporta "R$ 1.234.567,89"
-        // na fonte da linha TOTAL/VALOR NEGOCIADO (8,5pt, 90); VR. UNITÁRIO 11% (74)
-        // comporta o cabeçalho (72) e unitários até "R$ 123.456,78" (~69); QTD 9%
-        // comporta "20.000,00" (49).
-        private static readonly float[] ColPercentSimples = [10f, 32f, 12f, 12f, 9f, 11f, 14f];
-        // Rótulos curtos: o header cabe numa linha só e as colunas estreitas deixam de
-        // ser dimensionadas pelo próprio rótulo ("MATRÍCULA", "VR. UNIT. C/ DESC.").
+        // Regra (W = largura útil da área):
+        //  1. Colunas estreitas (MAT., QTD, valores): max(rótulo, maior valor do pedido),
+        //     medido sem quebra, × FolgaMedida + 2×padding — tudo numa linha.
+        //  2. MARCA e REFERÊNCIA: o mesmo, com TETO (TetoMarca/TetoReferencia × W) e
+        //     nunca menores que o próprio rótulo. Acima do teto o texto quebra (altura
+        //     medida em MedirAlturaLinha, nunca truncado).
+        //  3. Linha TOTAL: os campos (SEM DESCONTO = QTD+UNITÁRIO, COM DESCONTO / valor
+        //     = C/ DESC.+TOTAL ou só TOTAL) precisam comportar os textos na FontTotal —
+        //     senão essas colunas alargam ANTES de a DESCRIÇÃO receber o resto.
+        //  4. DESCRIÇÃO: todo o restante, com piso (PisoDescricao × W, e o bastante para
+        //     o rótulo "TOTAL (N itens)" nas colunas à esquerda). Piso não fecha → os
+        //     tetos de MARCA/REFERÊNCIA recuam proporcionalmente até os rótulos.
+        // Retrato, pior caso de produção (matrícula 5 dígitos, marca de 14, referência
+        // de 30, qtd 600,00, total do item R$ 11.264,88, total R$ 1.234.567,89), no DC
+        // da Brother: DESCRIÇÃO com 216 de 747 (29%) com desconto e %, 262 (35%) com a %
+        // desligada e 305 (41%) sem desconto — contra 168 e 239 das proporções fixas.
+        // Paisagem: a sobra inteira vai para ela.
         private static readonly string[] ColHeadersSimples =
             ["MAT.", "DESCRIÇÃO", "MARCA", "REFERÊNCIA", "QTD", "UNITÁRIO", "TOTAL"];
         private static readonly StringAlignment[] ColAlignSimples =
@@ -216,18 +230,10 @@ namespace CONTROLE_DE_PEDIDOS
             StringAlignment.Far, StringAlignment.Far, StringAlignment.Far
         ];
 
-        // COM desconto (8 colunas), larguras úteis em retrato: VR. UNIT. C/ DESC. 16%
-        // (111) comporta "R$ 12.345,67 (12,55%)" (108) numa linha; VR. TOTAL 12% (81)
-        // comporta "R$ 1.234.567,89" (78); ORIGINAL 10% (66) comporta "R$ 14.117,40"
-        // (64, o original de 12.345,67 a 12,55%); QTD 8% (51) comporta "20.000,00" (49);
-        // MATRÍCULA 10% e REFERÊNCIA 10,5% comportam os próprios cabeçalhos sem partir a
-        // palavra; MARCA 11% (74) comporta as marcas de uma palavra só do cadastro
-        // ("VEDAMOTORS", "PANTANEIRO"). A DESCRIÇÃO (22,5%) é quem cede — quebra em mais
-        // linhas, todas medidas. Os cabeçalhos longos quebram em 2 linhas ("VR. UNIT." /
-        // "ORIGINAL"), com a altura do header medida. Na linha TOTAL, SEM DESCONTO ocupa
-        // QTD+ORIGINAL (18%) e COM DESCONTO ocupa C/ DESC.+TOTAL (28%, útil 201) — largura
-        // para valor + % em 8,5pt ("R$ 1.234.567,89 (12,55%)" = 140).
-        private static readonly float[] ColPercentDesconto = [10f, 22.5f, 11f, 10.5f, 8f, 10f, 16f, 12f];
+        // COM desconto: UNITÁRIO é o original (estior.vr_prazo) e C/ DESC. o praticado,
+        // com a "(x,xx%)" quando _exibirPercentual — desligada, a coluna encolhe sozinha
+        // pela regra acima e a sobra vai para a DESCRIÇÃO. Rótulos curtos para o header
+        // caber numa linha e não ditar a largura das colunas estreitas.
         private static readonly string[] ColHeadersDesconto =
             ["MAT.", "DESCRIÇÃO", "MARCA", "REFERÊNCIA", "QTD",
              "UNITÁRIO", "C/ DESC.", "TOTAL"];
@@ -236,6 +242,17 @@ namespace CONTROLE_DE_PEDIDOS
             StringAlignment.Near, StringAlignment.Near, StringAlignment.Near, StringAlignment.Near,
             StringAlignment.Far, StringAlignment.Far, StringAlignment.Far, StringAlignment.Far
         ];
+
+        // Posições fixas nos dois layouts (as colunas de valor vêm depois de QTD).
+        private const int ColDescricao = 1, ColMarca = 2, ColReferencia = 3;
+        /// <summary>Folga sobre a largura medida. O preview mede no metafile e o job real
+        /// no DC da impressora; as larguras de cada job saem do próprio Graphics, mas a
+        /// folga garante que um texto que "cabe exato" num modo não quebre no outro —
+        /// mesma quebra, mesma paginação.</summary>
+        private const float FolgaMedida = 1.05f;
+        private const float TetoMarca = 0.11f;       // ~82 em retrato: "MAGNET MARELLI" (máx. 14) quebra em 2
+        private const float TetoReferencia = 0.13f;  // ~97 em retrato: p95 (15 caracteres) numa linha
+        private const float PisoDescricao = 0.25f;
 
         /// <summary>
         /// Logomarca embutida no EXE (Resources\logo-distribuidora.png). O MemoryStream
@@ -276,7 +293,6 @@ namespace CONTROLE_DE_PEDIDOS
             _temNegociado = cab.VrNegociado != 0m;
             _temDesconto = itens.Any(i => TemDesconto(OriginalEfetivo(i), i.VrUnitario));
             _somaOriginal = itens.Sum(i => Centavos(i.Quantidade * OriginalEfetivo(i)));
-            _colPercent = _temDesconto ? ColPercentDesconto : ColPercentSimples;
             _colHeaders = _temDesconto ? ColHeadersDesconto : ColHeadersSimples;
             _colAlign = _temDesconto ? ColAlignDesconto : ColAlignSimples;
             // NÃO trocar para true: o ResetTransform em GeometriaPagina.PrepararPagina
@@ -294,6 +310,9 @@ namespace CONTROLE_DE_PEDIDOS
             _estado = new EstadoPaginacao();
             _totalPaginas = null;
             _alturasLinhas = null;
+            // Larguras dependem do DC do job (preview ≠ impressora escolhida no
+            // PrintDialog): nunca reaproveitar as do job anterior.
+            _colW = null;
             _alturaHeader = AlturaHeaderTabela;
             _alturaLinhaTotal = AlturaLinhaTotal;
             _alturaAviso = 0f;
@@ -334,7 +353,9 @@ namespace CONTROLE_DE_PEDIDOS
 
         private void SimularPaginacao(Graphics g, RectangleF area)
         {
-            float[] colW = CalcularColunas(area.Width);
+            // Larguras PRIMEIRO: todas as alturas abaixo (itens, header, TOTAL) dependem
+            // delas. Calculadas uma vez, no Graphics do job, e guardadas para o desenho.
+            float[] colW = _colW = CalcularColunas(g, area.Width);
             _alturasLinhas = new float[_itens.Count];
             for (int i = 0; i < _itens.Count; i++)
                 _alturasLinhas[i] = RelatorioTabela.MedirAlturaLinha(g, colW, ValoresItem(_itens[i]),
@@ -374,7 +395,9 @@ namespace CONTROLE_DE_PEDIDOS
             float x = area.Left;
             float y = area.Top;
             float larguraTotal = area.Width;
-            float[] colW = CalcularColunas(larguraTotal);
+            // As do job, já calculadas em SimularPaginacao (página 1, antes de qualquer
+            // LayoutPagina) — recalcular aqui reabriria a porta para deriva.
+            float[] colW = _colW!;
             float limiteY = area.Bottom - AlturaFaixaPagina;
 
             using var penBorda = new Pen(Color.Black, 1.2f);
@@ -496,12 +519,112 @@ namespace CONTROLE_DE_PEDIDOS
             }
         }
 
-        private float[] CalcularColunas(float larguraTotal)
+        /// <summary>
+        /// Larguras das colunas deste pedido (regra completa no comentário de
+        /// ColHeadersSimples). Roda UMA vez por job, em SimularPaginacao, no Graphics do
+        /// job; soma = larguraTotal.
+        /// </summary>
+        private float[] CalcularColunas(Graphics g, float larguraTotal)
         {
-            var colW = new float[_colPercent.Length];
-            for (int i = 0; i < _colPercent.Length; i++)
-                colW[i] = larguraTotal * _colPercent[i] / 100f;
-            return colW;
+            int n = _colHeaders.Length;
+            var w = new float[n];
+            var linhas = _itens.Select(ValoresItem).ToList();
+
+            // 1+2. Natural de cada coluna (exceto DESCRIÇÃO): rótulo e valores numa linha.
+            for (int c = 0; c < n; c++)
+            {
+                if (c == ColDescricao) continue;
+                float natural = LarguraSemQuebra(g, _colHeaders[c], FontHeader);
+                foreach (var v in linhas)
+                    natural = Math.Max(natural, LarguraSemQuebra(g, v[c], FontDados));
+                w[c] = natural;
+            }
+            // MARCA/REFERÊNCIA com teto — mas nunca abaixo do próprio rótulo (o header
+            // não quebra e o recuo do passo 4 tem um chão).
+            float minMarca = LarguraSemQuebra(g, _colHeaders[ColMarca], FontHeader);
+            float minRef = LarguraSemQuebra(g, _colHeaders[ColReferencia], FontHeader);
+            w[ColMarca] = Math.Min(w[ColMarca], Math.Max(minMarca, larguraTotal * TetoMarca));
+            w[ColReferencia] = Math.Min(w[ColReferencia], Math.Max(minRef, larguraTotal * TetoReferencia));
+
+            // 3. Linha TOTAL: o valor do campo é desenhado NoWrap no layout sem desconto
+            // (largura insuficiente = reticências) e, com desconto, quebraria em 2 linhas
+            // — por isso os campos alargam ANTES de a DESCRIÇÃO receber o resto.
+            int colValor = ColunaValorTotal(w);
+            float precisaValor = _temDesconto
+                ? Math.Max(LarguraSemQuebra(g, TextoTotalComDesconto(), FontTotal),
+                           LarguraSemQuebra(g, "COM DESCONTO", FontHeader))
+                : LarguraSemQuebra(g, Dinheiro(_somaItens), FontTotal);
+            if (_temNegociado)
+                precisaValor = Math.Max(precisaValor, LarguraSemQuebra(g, Dinheiro(_cab.VrNegociado), FontTotal));
+            GarantirFaixa(w, colValor, n, precisaValor);
+            int colRotulos = colValor;   // colunas à esquerda do rótulo "TOTAL (N itens)"
+            if (_temDesconto)
+            {
+                int colSem = ColunaSemDesconto(w);
+                GarantirFaixa(w, colSem, colValor, Math.Max(
+                    LarguraSemQuebra(g, Dinheiro(_somaOriginal), FontTotal),
+                    LarguraSemQuebra(g, "SEM DESCONTO", FontHeader)));
+                colRotulos = colSem;
+            }
+
+            // 4. DESCRIÇÃO = resto, com piso. O piso também garante que "TOTAL (N itens)"
+            // e "VALOR NEGOCIADO" (NoWrap) caibam nas colunas à esquerda do campo.
+            string rotuloTotal = $"TOTAL ({_itens.Count} {(_itens.Count == 1 ? "item" : "itens")})";
+            float precisaRotulos = LarguraSemQuebra(g, rotuloTotal, FontTotal);
+            if (_temNegociado)
+                precisaRotulos = Math.Max(precisaRotulos, LarguraSemQuebra(g, "VALOR NEGOCIADO", FontTotal));
+            float outrasRotulos = w.Take(colRotulos).Sum();   // w[ColDescricao] ainda é 0
+            float piso = Math.Max(larguraTotal * PisoDescricao, precisaRotulos - outrasRotulos);
+
+            float resto = larguraTotal - w.Sum();
+            if (resto < piso)
+            {
+                // Recuo proporcional dos tetos de MARCA/REFERÊNCIA até os rótulos.
+                float recuavel = (w[ColMarca] - minMarca) + (w[ColReferencia] - minRef);
+                if (recuavel > 0f)
+                {
+                    float k = Math.Min(1f, (piso - resto) / recuavel);
+                    w[ColMarca] -= (w[ColMarca] - minMarca) * k;
+                    w[ColReferencia] -= (w[ColReferencia] - minRef) * k;
+                    resto = larguraTotal - w.Sum();
+                }
+            }
+            if (resto < piso)
+            {
+                // Último recurso (área degenerada / valores absurdos): encolhe todas as
+                // outras na mesma proporção para devolver o piso. Células quebram (altura
+                // medida); só o campo de valor sem desconto pode ganhar reticências.
+                Logger.Warn($"Cópia de Pedido {_cab.Orcamento}: colunas não cabem em {larguraTotal:F1} (DESCRIÇÃO {resto:F1} < piso {piso:F1}); encolhendo proporcionalmente.");
+                float outras = w.Sum();
+                float alvo = Math.Max(0f, larguraTotal - piso);
+                for (int c = 0; c < n; c++) w[c] *= outras > 0f ? alvo / outras : 0f;
+                resto = larguraTotal - w.Sum();
+            }
+            w[ColDescricao] = resto;
+            return w;
+        }
+
+        /// <summary>
+        /// Largura de coluna em que o texto cabe numa linha: medida sem limite (mesmo
+        /// StringFormat padrão que MedirAlturaLinha usa para decidir a quebra) × folga,
+        /// + 2×padding, + 1 para absorver o truncamento (int) da largura útil lá dentro.
+        /// </summary>
+        private static float LarguraSemQuebra(Graphics g, string texto, Font fonte)
+        {
+            if (string.IsNullOrEmpty(texto)) return PaddingCelula * 2f;
+            return (float)Math.Ceiling(g.MeasureString(texto, fonte).Width * FolgaMedida)
+                + PaddingCelula * 2f + 1f;
+        }
+
+        /// <summary>Faz a soma de w[de..ate) comportar "precisa"; o déficit é repartido
+        /// na proporção das larguras atuais (cada coluna mantém o seu peso).</summary>
+        private static void GarantirFaixa(float[] w, int de, int ate, float precisa)
+        {
+            float soma = 0f;
+            for (int c = de; c < ate; c++) soma += w[c];
+            if (soma >= precisa || soma <= 0f) return;
+            float k = precisa / soma;
+            for (int c = de; c < ate; c++) w[c] *= k;
         }
 
         private string[] ValoresItem(CopiaPedidoItem item)
