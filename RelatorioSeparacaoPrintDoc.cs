@@ -44,6 +44,9 @@ namespace CONTROLE_DE_PEDIDOS
         private bool _preview;         // MODO DE RENDERIZAÇÃO: separado de propósito —
                                        // layout não pode depender de regra de negócio
         private PrintingHelper.GeometriaPagina? _geo;
+        /// <summary>Larguras das colunas DESTE job: calculadas na página 1 (CalcularColunas)
+        /// e reaproveitadas nas seguintes — todas as páginas com as mesmas colunas.</summary>
+        private float[]? _colW;
 
         /// <summary>Disparado uma vez após impressão física bem-sucedida (preview não conta).</summary>
         public event Action? ImpressaoRealConcluida;
@@ -63,10 +66,34 @@ namespace CONTROLE_DE_PEDIDOS
         private const float BarcodeAltura = 45f;
         private const float QuietZone = 15f;
 
-        // Proporções das colunas (soma = 100%)
-        // QTD com 6%: comporta "2000,00" (quantidade de 4 dígitos com casas decimais)
-        private static readonly float[] ColPercent = [3.5f, 5f, 10f, 29f, 10f, 8f, 9f, 6f, 4.5f, 7.5f, 7.5f];
-        private static readonly string[] ColHeaders = ["", "ITEM", "MATRÍCULA", "DESCRIÇÃO", "REFERÊNCIA", "MARCA", "LOCAL", "QTD", "UN", "FÍSICO", "SALDO"];
+        // ===== Larguras das colunas: AUTO-AJUSTE POR JOB =====
+        // Antes eram proporções fixas (DESCRIÇÃO 29%): ITEM/MATRÍCULA/LOCAL/UN/números
+        // reservavam espaço que o pedido não usa, a DESCRIÇÃO quebrava em quase todo
+        // item e a MARCA (8%) partia palavras no meio ("VEDAMOT/ORS"). Agora cada job
+        // mede o PRÓPRIO pedido (CalcularColunas, uma vez, na página 1) num Graphics de
+        // REFERÊNCIA (MedidorLargura — preview e impressão recebem as mesmas larguras).
+        //
+        // Regra (W = largura útil da área):
+        //  1. Caixa de marcação: largura fixa (o quadrado de 11 + respiro).
+        //  2. Colunas estreitas (ITEM, MAT., QTD, UN, FÍSICO, SALDO): max(rótulo, maior
+        //     valor do pedido), medido sem quebra — tudo numa linha.
+        //  3. REFERÊNCIA, MARCA e LOCAL: o mesmo, com TETO (fração de W) e nunca menores
+        //     que o próprio rótulo. Acima do teto o texto quebra (altura medida, nunca
+        //     truncado). Teto da MARCA comporta as marcas de uma palavra do cadastro
+        //     ("VEDAMOTORS", "PANTANEIRO") sem partir a palavra.
+        //  4. DESCRIÇÃO: todo o restante, com piso. Piso não fecha → os tetos do passo 3
+        //     recuam até os rótulos; ainda assim não fecha (área degenerada) → todas
+        //     encolhem na mesma proporção (Warn no log).
+        // Dados de produção (filial 5, 37 mil itens): LOCAL até 10 ("CST-SEG-43"), UN até
+        // 3, ITEM até 311, QTD até 600, MARCA até 14, REFERÊNCIA p95 15 / máx. 30.
+        private static readonly string[] ColHeaders = ["", "ITEM", "MAT.", "DESCRIÇÃO", "REFERÊNCIA", "MARCA", "LOCAL", "QTD", "UN", "FÍSICO", "SALDO"];
+        private const int ColCaixa = 0, ColDescricao = 3, ColReferencia = 4, ColMarca = 5, ColLocal = 6;
+        private const float LarguraCaixa = 24f;       // quadrado de 11 centralizado
+        private const float TetoReferencia = 0.13f;
+        private const float TetoMarca = 0.11f;
+        private const float TetoLocal = 0.12f;
+        private const float PisoDescricao = 0.30f;
+        private const float PaddingCelula = 4f;
         private static readonly StringAlignment[] ColAlign =
         [
             StringAlignment.Center, StringAlignment.Center, StringAlignment.Near, StringAlignment.Near,
@@ -95,6 +122,9 @@ namespace CONTROLE_DE_PEDIDOS
             base.OnBeginPrint(e);
             _indiceItem = 0;
             _numeroPagina = 0;
+            // Larguras dependem da área deste job (orientação/impressora do PrintDialog):
+            // nunca reaproveitar as do job anterior.
+            _colW = null;
             // Preview renderiza com PrintToPreview; impressão física (inclusive
             // "Microsoft Print to PDF") chega como PrintToPrinter/PrintToFile.
             _impressaoReal = e.PrintAction is PrintAction.PrintToPrinter or PrintAction.PrintToFile;
@@ -129,13 +159,12 @@ namespace CONTROLE_DE_PEDIDOS
             float y = area.Top;
             float larguraTotal = area.Width;
 
-            float[] colW = new float[ColPercent.Length];
-            for (int i = 0; i < ColPercent.Length; i++)
-                colW[i] = larguraTotal * ColPercent[i] / 100f;
+            // Uma vez por job (página 1); as demais páginas usam as mesmas colunas.
+            float[] colW = _colW ??= CalcularColunas(larguraTotal);
 
             const float alturaLinhaMin = 18f;
             const float alturaHeaderTabela = 22f;
-            const float paddingCelula = 4f;
+            const float paddingCelula = PaddingCelula;
 
             using var penBorda = new Pen(Color.Black, 1.2f);
             using var penLinha = new Pen(Color.FromArgb(180, 180, 180), 0.6f);
@@ -158,27 +187,12 @@ namespace CONTROLE_DE_PEDIDOS
             g.DrawLine(penBorda, x, y, x + larguraTotal, y);
             y += 1;
 
-            string fmtNumero = _casasDecimais ? "0.00" : "0";
             float limiteY = area.Bottom;
 
             int itensNestaPagina = 0;
             while (_indiceItem < _itens.Count)
             {
-                var item = _itens[_indiceItem];
-                string[] valores =
-                [
-                    "", // checkbox desenhado abaixo
-                    item.Item.ToString(),
-                    item.Matricula,
-                    item.Descricao,
-                    item.Referencia,
-                    item.Marca,
-                    item.Local,
-                    item.Quantidade.ToString(fmtNumero),
-                    item.Unidade,
-                    item.EstoqueFisico.ToString(fmtNumero),
-                    item.SaldoAtual.ToString(fmtNumero)
-                ];
+                string[] valores = ValoresItem(_itens[_indiceItem]);
 
                 // Altura dinâmica: dados completos, com quebra de linha por coluna
                 float alturaLinha = RelatorioTabela.MedirAlturaLinha(g, colW, valores, FontDados, paddingCelula, alturaLinhaMin);
@@ -329,6 +343,86 @@ namespace CONTROLE_DE_PEDIDOS
             }
 
             return linhaY + 26;
+        }
+
+        private string[] ValoresItem(SeparacaoItem item)
+        {
+            string fmtNumero = _casasDecimais ? "0.00" : "0";
+            return
+            [
+                "", // checkbox desenhado à parte
+                item.Item.ToString(),
+                item.Matricula,
+                item.Descricao,
+                item.Referencia,
+                item.Marca,
+                item.Local,
+                item.Quantidade.ToString(fmtNumero),
+                item.Unidade,
+                item.EstoqueFisico.ToString(fmtNumero),
+                item.SaldoAtual.ToString(fmtNumero)
+            ];
+        }
+
+        /// <summary>
+        /// Larguras das colunas deste pedido (regra completa no comentário de ColHeaders).
+        /// Mede no Graphics de REFERÊNCIA (MedidorLargura), nunca no do job. Soma = larguraTotal.
+        /// </summary>
+        private float[] CalcularColunas(float larguraTotal)
+        {
+            using var med = new MedidorLargura();
+            int n = ColHeaders.Length;
+            var w = new float[n];
+            var linhas = _itens.Select(ValoresItem).ToList();
+
+            // 1+2+3. Natural de cada coluna (exceto caixa e DESCRIÇÃO): rótulo e valores
+            // numa linha. O header é desenhado NoWrap, por isso nunca abaixo do rótulo.
+            var minRotulo = new float[n];
+            for (int c = 0; c < n; c++)
+            {
+                if (c == ColCaixa || c == ColDescricao) continue;
+                minRotulo[c] = med.SemQuebra(ColHeaders[c], FontHeader, PaddingCelula);
+                float natural = minRotulo[c];
+                foreach (var v in linhas)
+                    natural = Math.Max(natural, med.SemQuebra(v[c], FontDados, PaddingCelula));
+                w[c] = natural;
+            }
+            w[ColCaixa] = LarguraCaixa;
+            int[] comTeto = [ColReferencia, ColMarca, ColLocal];
+            float[] tetos = [TetoReferencia, TetoMarca, TetoLocal];
+            for (int i = 0; i < comTeto.Length; i++)
+            {
+                int c = comTeto[i];
+                w[c] = Math.Min(w[c], Math.Max(minRotulo[c], larguraTotal * tetos[i]));
+            }
+
+            // 4. DESCRIÇÃO = resto, com piso.
+            float piso = larguraTotal * PisoDescricao;
+            float resto = larguraTotal - w.Sum();
+            if (resto < piso)
+            {
+                // Recuo proporcional das colunas com teto até os próprios rótulos.
+                float recuavel = comTeto.Sum(c => w[c] - minRotulo[c]);
+                if (recuavel > 0f)
+                {
+                    float k = Math.Min(1f, (piso - resto) / recuavel);
+                    foreach (int c in comTeto) w[c] -= (w[c] - minRotulo[c]) * k;
+                    resto = larguraTotal - w.Sum();
+                }
+            }
+            if (resto < piso)
+            {
+                // Último recurso (área degenerada / valores absurdos): encolhe todas as
+                // outras na mesma proporção. Células quebram (altura medida); rótulos do
+                // header podem ganhar reticências.
+                Logger.Warn($"Separação {_cab.Orcamento}: colunas não cabem em {larguraTotal:F1} (DESCRIÇÃO {resto:F1} < piso {piso:F1}); encolhendo proporcionalmente.");
+                float outras = w.Sum();
+                float alvo = Math.Max(0f, larguraTotal - piso);
+                for (int c = 0; c < n; c++) w[c] *= outras > 0f ? alvo / outras : 0f;
+                resto = larguraTotal - w.Sum();
+            }
+            w[ColDescricao] = resto;
+            return w;
         }
 
         // MedirAlturaLinha e DrawRow foram extraídos para PrintingHelper.RelatorioTabela,

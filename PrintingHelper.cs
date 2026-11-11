@@ -692,6 +692,51 @@ namespace CONTROLE_DE_PEDIDOS
     }
 
     /// <summary>
+    /// Mede LARGURAS de coluna num Graphics de REFERÊNCIA fixo (bitmap 600 dpi em
+    /// 1/100", a unidade dos jobs), nunca no Graphics do job: preview (metafile) e
+    /// impressora medem com diferença de fração de unidade, e com auto-ajuste a coluna
+    /// que fica com a sobra (DESCRIÇÃO) oscilaria — um item quebraria só no papel e
+    /// preview e impressão paginariam diferente. Com a referência, mesma área + mesmos
+    /// dados = mesmas larguras nos dois modos. Só as ALTURAS seguem medidas no job.
+    /// Mesmo método da Cópia de Pedido (ver docs/IMPRESSAO.md).
+    /// </summary>
+    internal sealed class MedidorLargura : IDisposable
+    {
+        /// <summary>Folga sobre a medida: cobre a diferença entre a referência e o DC
+        /// real de cada impressora/preview (bem abaixo de 5% nas medições).</summary>
+        internal const float Folga = 1.05f;
+
+        private readonly Bitmap _bmp;
+        private readonly Graphics _g;
+
+        internal MedidorLargura()
+        {
+            _bmp = new Bitmap(1, 1);
+            _bmp.SetResolution(600f, 600f);
+            _g = Graphics.FromImage(_bmp);
+            // 1/100" explícito: num bitmap, GraphicsUnit.Display NÃO é 1/100" (só em
+            // impressora) — mediria tudo ~45% maior.
+            _g.PageUnit = GraphicsUnit.Inch;
+            _g.PageScale = 0.01f;
+        }
+
+        /// <summary>Largura de coluna em que o texto cabe numa linha: medida × folga,
+        /// + 2×padding, + 1 (absorve o truncamento int da largura útil em
+        /// MedirAlturaLinha).</summary>
+        internal float SemQuebra(string? texto, Font fonte, float padding)
+        {
+            if (string.IsNullOrEmpty(texto)) return padding * 2f;
+            return (float)Math.Ceiling(_g.MeasureString(texto, fonte).Width * Folga) + padding * 2f + 1f;
+        }
+
+        public void Dispose()
+        {
+            _g.Dispose();
+            _bmp.Dispose();
+        }
+    }
+
+    /// <summary>
     /// Primitivas de tabela compartilhadas pelos relatórios impressos
     /// (Separação de Mercadorias e Cópia de Pedido): medição de altura de linha
     /// com quebra por coluna e desenho de uma linha de células.
