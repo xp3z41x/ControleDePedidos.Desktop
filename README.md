@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-11.8.0-0969da?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-11.9.0-0969da?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/.NET-10-512BD4?style=flat-square&logo=dotnet" alt=".NET 10">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%2FServer-0078D6?style=flat-square&logo=windows" alt="Windows">
   <img src="https://img.shields.io/badge/database-PostgreSQL-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">

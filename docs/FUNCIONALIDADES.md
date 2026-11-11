@@ -1,6 +1,6 @@
 # Funcionalidades — especificação
 
-Especificação funcional de cada área do app, na versão 11.8.0. Números de comportamento (regras, guardas, mensagens) refletem o código; âncoras técnicas nos documentos de [arquitetura](ARQUITETURA.md), [banco](BANCO-DE-DADOS.md) e [impressão](IMPRESSAO.md).
+Especificação funcional de cada área do app, na versão 11.9.0. Números de comportamento (regras, guardas, mensagens) refletem o código; âncoras técnicas nos documentos de [arquitetura](ARQUITETURA.md), [banco](BANCO-DE-DADOS.md) e [impressão](IMPRESSAO.md).
 
 ## Janela principal
 
