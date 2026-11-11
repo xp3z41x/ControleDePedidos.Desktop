@@ -75,7 +75,7 @@ namespace CONTROLE_DE_PEDIDOS
         //
         // Regra (W = largura útil da área):
         //  1. Caixa de marcação: largura fixa (o quadrado de 11 + respiro).
-        //  2. Colunas estreitas (ITEM, MAT., QTD, UN, FÍSICO, SALDO): max(rótulo, maior
+        //  2. Colunas estreitas (MAT., QTD, UN, FÍSICO, SALDO): max(rótulo, maior
         //     valor do pedido), medido sem quebra — tudo numa linha.
         //  3. REFERÊNCIA, MARCA e LOCAL: o mesmo, com TETO (fração de W) e nunca menores
         //     que o próprio rótulo. Acima do teto o texto quebra (altura medida, nunca
@@ -85,9 +85,13 @@ namespace CONTROLE_DE_PEDIDOS
         //     recuam até os rótulos; ainda assim não fecha (área degenerada) → todas
         //     encolhem na mesma proporção (Warn no log).
         // Dados de produção (filial 5, 37 mil itens): LOCAL até 10 ("CST-SEG-43"), UN até
-        // 3, ITEM até 311, QTD até 600, MARCA até 14, REFERÊNCIA p95 15 / máx. 30.
-        private static readonly string[] ColHeaders = ["", "ITEM", "MAT.", "DESCRIÇÃO", "REFERÊNCIA", "MARCA", "LOCAL", "QTD", "UN", "FÍSICO", "SALDO"];
-        private const int ColCaixa = 0, ColDescricao = 3, ColReferencia = 4, ColMarca = 5, ColLocal = 6;
+        // 3, QTD até 600, MARCA até 14, REFERÊNCIA p95 15 / máx. 30.
+        //
+        // Sem a coluna ITEM (nº sequencial do item no pedido) por decisão do dono: a
+        // caixa de marcação já guia a conferência e a largura vai para a DESCRIÇÃO.
+        // SeparacaoItem.Item continua carregado (ordenação/uso futuro), só não é impresso.
+        private static readonly string[] ColHeaders = ["", "MAT.", "DESCRIÇÃO", "REFERÊNCIA", "MARCA", "LOCAL", "QTD", "UN", "FÍSICO", "SALDO"];
+        private const int ColCaixa = 0, ColDescricao = 2, ColReferencia = 3, ColMarca = 4, ColLocal = 5;
         private const float LarguraCaixa = 24f;       // quadrado de 11 centralizado
         private const float TetoReferencia = 0.13f;
         private const float TetoMarca = 0.11f;
@@ -96,7 +100,7 @@ namespace CONTROLE_DE_PEDIDOS
         private const float PaddingCelula = 4f;
         private static readonly StringAlignment[] ColAlign =
         [
-            StringAlignment.Center, StringAlignment.Center, StringAlignment.Near, StringAlignment.Near,
+            StringAlignment.Center, StringAlignment.Near, StringAlignment.Near,
             StringAlignment.Near, StringAlignment.Near, StringAlignment.Near,
             StringAlignment.Far, StringAlignment.Center, StringAlignment.Far, StringAlignment.Far
         ];
@@ -351,7 +355,6 @@ namespace CONTROLE_DE_PEDIDOS
             return
             [
                 "", // checkbox desenhado à parte
-                item.Item.ToString(),
                 item.Matricula,
                 item.Descricao,
                 item.Referencia,
